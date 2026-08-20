@@ -1,6 +1,6 @@
 {
   "name": "lumio-backend",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Backend officiel de Lumio",
   "main": "server.js",
   "scripts": {
@@ -9,6 +9,8 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1"
   }
 }
