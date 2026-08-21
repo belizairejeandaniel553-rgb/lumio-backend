@@ -1,4 +1,4 @@
-       require("dotenv").config();
+require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
@@ -28,34 +28,31 @@ if (!JWT_SECRET) {
 // =====================================================
 
 const TCHOTCHOM_API_KEY =
-  process.env.TCHOTCHOM_API_KEY;
+  process.env.TCHOTCHOM_API_KEY || "";
 
 const TCHOTCHOM_SECRET_KEY =
-  process.env.TCHOTCHOM_SECRET_KEY;
+  process.env.TCHOTCHOM_SECRET_KEY || "";
 
 const TCHOTCHOM_PAYEE_EMAIL =
-  process.env.TCHOTCHOM_PAYEE_EMAIL;
+  process.env.TCHOTCHOM_PAYEE_EMAIL || "";
 
-const TCHOTCHOM_BASE_URL =
-  "https://www.sbfastgroup.com/api/v1";
+/*
+  IMPORTANT :
 
-if (!TCHOTCHOM_API_KEY) {
-  console.warn(
-    "ATTENTION : TCHOTCHOM_API_KEY manque."
-  );
-}
+  Mets ici l'URL EXACTE fournie par Tchotchom/SBFast
+  pour créer un paiement.
 
-if (!TCHOTCHOM_SECRET_KEY) {
-  console.warn(
-    "ATTENTION : TCHOTCHOM_SECRET_KEY manque."
-  );
-}
+  Exemple dans Render :
 
-if (!TCHOTCHOM_PAYEE_EMAIL) {
-  console.warn(
-    "ATTENTION : TCHOTCHOM_PAYEE_EMAIL manque."
-  );
-}
+  TCHOTCHOM_PAYMENT_URL=https://...
+
+  On ne fabrique pas cette URL automatiquement,
+  car une mauvaise route provoque "Resource not found".
+*/
+
+const TCHOTCHOM_PAYMENT_URL =
+  process.env.TCHOTCHOM_PAYMENT_URL || "";
+
 
 // =====================================================
 // MIDDLEWARE
@@ -74,6 +71,7 @@ app.use(
   })
 );
 
+
 // =====================================================
 // POSTGRESQL
 // =====================================================
@@ -81,6 +79,7 @@ app.use(
 let pool = null;
 
 if (process.env.DATABASE_URL) {
+
   pool = new Pool({
     connectionString:
       process.env.DATABASE_URL,
@@ -93,23 +92,30 @@ if (process.env.DATABASE_URL) {
         : false
   });
 
-  pool.on("error", (error) => {
-    console.error(
-      "PostgreSQL error:",
-      error
-    );
-  });
+  pool.on(
+    "error",
+    (error) => {
+      console.error(
+        "PostgreSQL error:",
+        error
+      );
+    }
+  );
+
 } else {
+
   console.error(
     "DATABASE_URL manque."
   );
 }
 
+
 // =====================================================
-// AUTH
+// AUTHENTIFICATION
 // =====================================================
 
 function createToken(user) {
+
   return jwt.sign(
     {
       id: user.id,
@@ -122,15 +128,18 @@ function createToken(user) {
   );
 }
 
+
 function authenticate(
   req,
   res,
   next
 ) {
+
   const header =
     req.headers.authorization || "";
 
   if (!header.startsWith("Bearer ")) {
+
     return res.status(401).json({
       success: false,
       error:
@@ -142,6 +151,7 @@ function authenticate(
     header.substring(7);
 
   try {
+
     const decoded =
       jwt.verify(
         token,
@@ -153,6 +163,7 @@ function authenticate(
     next();
 
   } catch {
+
     return res.status(401).json({
       success: false,
       error:
@@ -160,6 +171,7 @@ function authenticate(
     });
   }
 }
+
 
 // =====================================================
 // TCHOTCHOM AUTH
@@ -171,6 +183,7 @@ function getTchotchomHeaders() {
     !TCHOTCHOM_API_KEY ||
     !TCHOTCHOM_SECRET_KEY
   ) {
+
     throw new Error(
       "Les identifiants Tchotchom ne sont pas configurés."
     );
@@ -182,6 +195,7 @@ function getTchotchomHeaders() {
     ).toString("base64");
 
   return {
+
     Authorization:
       `Basic ${credentials}`,
 
@@ -193,32 +207,50 @@ function getTchotchomHeaders() {
   };
 }
 
+
 // =====================================================
-// DATABASE INITIALIZATION
+// DATABASE
 // =====================================================
 
 async function initializeDatabase() {
 
   if (!pool) {
+
     throw new Error(
       "DATABASE_URL non configurée."
     );
   }
 
+
+  // USERS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
+
       id SERIAL PRIMARY KEY,
-      email VARCHAR(255) UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      premium BOOLEAN DEFAULT FALSE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+      email VARCHAR(255)
+        UNIQUE NOT NULL,
+
+      password_hash TEXT
+        NOT NULL,
+
+      premium BOOLEAN
+        DEFAULT FALSE,
+
+      created_at TIMESTAMP
+        DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
+
+  // SUBSCRIPTIONS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS subscriptions (
+
       id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id)
+
+      user_id INTEGER
+        REFERENCES users(id)
         ON DELETE CASCADE,
 
       status VARCHAR(30)
@@ -245,11 +277,15 @@ async function initializeDatabase() {
     );
   `);
 
+
+  // PAYMENTS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS payments (
+
       id SERIAL PRIMARY KEY,
 
-      user_id INTEGER REFERENCES users(id)
+      user_id INTEGER
+        REFERENCES users(id)
         ON DELETE CASCADE,
 
       provider VARCHAR(50)
@@ -280,11 +316,15 @@ async function initializeDatabase() {
     );
   `);
 
+
+  // TASKS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tasks (
+
       id SERIAL PRIMARY KEY,
 
-      user_id INTEGER REFERENCES users(id)
+      user_id INTEGER
+        REFERENCES users(id)
         ON DELETE CASCADE,
 
       title TEXT NOT NULL,
@@ -300,11 +340,15 @@ async function initializeDatabase() {
     );
   `);
 
+
+  // EVENTS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS events (
+
       id SERIAL PRIMARY KEY,
 
-      user_id INTEGER REFERENCES users(id)
+      user_id INTEGER
+        REFERENCES users(id)
         ON DELETE CASCADE,
 
       title TEXT NOT NULL,
@@ -318,16 +362,21 @@ async function initializeDatabase() {
     );
   `);
 
+
+  // NOTES
   await pool.query(`
     CREATE TABLE IF NOT EXISTS notes (
+
       id SERIAL PRIMARY KEY,
 
-      user_id INTEGER REFERENCES users(id)
+      user_id INTEGER
+        REFERENCES users(id)
         ON DELETE CASCADE,
 
       title TEXT NOT NULL,
 
-      content TEXT DEFAULT '',
+      content TEXT
+        DEFAULT '',
 
       created_at TIMESTAMP
         DEFAULT CURRENT_TIMESTAMP,
@@ -337,11 +386,15 @@ async function initializeDatabase() {
     );
   `);
 
+
+  // BUDGET
   await pool.query(`
     CREATE TABLE IF NOT EXISTS budgets (
+
       id SERIAL PRIMARY KEY,
 
-      user_id INTEGER REFERENCES users(id)
+      user_id INTEGER
+        REFERENCES users(id)
         ON DELETE CASCADE,
 
       description TEXT NOT NULL,
@@ -357,11 +410,15 @@ async function initializeDatabase() {
     );
   `);
 
+
+  // GOALS
   await pool.query(`
     CREATE TABLE IF NOT EXISTS goals (
+
       id SERIAL PRIMARY KEY,
 
-      user_id INTEGER REFERENCES users(id)
+      user_id INTEGER
+        REFERENCES users(id)
         ON DELETE CASCADE,
 
       title TEXT NOT NULL,
@@ -376,10 +433,12 @@ async function initializeDatabase() {
     );
   `);
 
+
   console.log(
     "Lumio database ready."
   );
 }
+
 
 // =====================================================
 // HOME
@@ -410,31 +469,54 @@ app.get(
       }
     }
 
+
     res.json({
-      app: "Lumio",
-      backend: "online",
+
+      app:
+        "Lumio",
+
+      backend:
+        "online",
+
       database,
-      version: "4.0.0",
+
+      version:
+        "5.0.0",
 
       features: [
+
         "authentication",
+
         "postgresql",
+
         "tasks",
+
         "planning",
+
         "notes",
+
         "budget",
+
         "goals",
+
         "focus",
+
         "premium",
+
         "subscriptions",
+
         "payments",
+
         "tchotchom",
+
         "moncash",
+
         "pwa-ready"
       ]
     });
   }
 );
+
 
 // =====================================================
 // HEALTH
@@ -465,8 +547,11 @@ app.get(
       }
     }
 
+
     res.json({
-      success: true,
+
+      success:
+        true,
 
       backend:
         "online",
@@ -474,17 +559,23 @@ app.get(
       database,
 
       version:
-        "4.0.0",
+        "5.0.0",
 
       tchotchomConfigured:
         Boolean(
           TCHOTCHOM_API_KEY &&
           TCHOTCHOM_SECRET_KEY &&
           TCHOTCHOM_PAYEE_EMAIL
+        ),
+
+      paymentUrlConfigured:
+        Boolean(
+          TCHOTCHOM_PAYMENT_URL
         )
     });
   }
 );
+
 
 // =====================================================
 // REGISTER
@@ -501,31 +592,43 @@ app.post(
         password
       } = req.body;
 
+
       if (
         !email ||
         !password
       ) {
+
         return res.status(400).json({
-          success: false,
+
+          success:
+            false,
+
           error:
             "Email et mot de passe requis."
         });
       }
+
 
       const cleanEmail =
         String(email)
           .trim()
           .toLowerCase();
 
+
       if (
         password.length < 6
       ) {
+
         return res.status(400).json({
-          success: false,
+
+          success:
+            false,
+
           error:
             "Le mot de passe doit contenir au moins 6 caractères."
         });
       }
+
 
       const existing =
         await pool.query(
@@ -537,15 +640,21 @@ app.post(
           [cleanEmail]
         );
 
+
       if (
         existing.rows.length > 0
       ) {
+
         return res.status(409).json({
-          success: false,
+
+          success:
+            false,
+
           error:
             "Ce compte existe déjà."
         });
       }
+
 
       const passwordHash =
         await bcrypt.hash(
@@ -553,13 +662,20 @@ app.post(
           12
         );
 
+
       const result =
         await pool.query(
           `
           INSERT INTO users
-            (email, password_hash)
+            (
+              email,
+              password_hash
+            )
           VALUES
-            ($1, $2)
+            (
+              $1,
+              $2
+            )
           RETURNING
             id,
             email,
@@ -571,24 +687,35 @@ app.post(
           ]
         );
 
+
       const user =
         result.rows[0];
+
 
       const token =
         createToken(user);
 
+
       res.status(201).json({
-        success: true,
+
+        success:
+          true,
 
         token,
 
         user: {
-          id: user.id,
-          email: user.email,
+
+          id:
+            user.id,
+
+          email:
+            user.email,
+
           premium:
             user.premium
         }
       });
+
 
     } catch (error) {
 
@@ -597,14 +724,19 @@ app.post(
         error
       );
 
+
       res.status(500).json({
-        success: false,
+
+        success:
+          false,
+
         error:
           "Impossible de créer le compte."
       });
     }
   }
 );
+
 
 // =====================================================
 // LOGIN
@@ -621,21 +753,28 @@ app.post(
         password
       } = req.body;
 
+
       if (
         !email ||
         !password
       ) {
+
         return res.status(400).json({
-          success: false,
+
+          success:
+            false,
+
           error:
             "Email et mot de passe requis."
         });
       }
 
+
       const cleanEmail =
         String(email)
           .trim()
           .toLowerCase();
+
 
       const result =
         await pool.query(
@@ -651,18 +790,25 @@ app.post(
           [cleanEmail]
         );
 
+
       if (
         result.rows.length === 0
       ) {
+
         return res.status(401).json({
-          success: false,
+
+          success:
+            false,
+
           error:
             "Email ou mot de passe incorrect."
         });
       }
 
+
       const user =
         result.rows[0];
+
 
       const valid =
         await bcrypt.compare(
@@ -670,29 +816,44 @@ app.post(
           user.password_hash
         );
 
+
       if (!valid) {
+
         return res.status(401).json({
-          success: false,
+
+          success:
+            false,
+
           error:
             "Email ou mot de passe incorrect."
         });
       }
 
+
       const token =
         createToken(user);
 
+
       res.json({
-        success: true,
+
+        success:
+          true,
 
         token,
 
         user: {
-          id: user.id,
-          email: user.email,
+
+          id:
+            user.id,
+
+          email:
+            user.email,
+
           premium:
             user.premium
         }
       });
+
 
     } catch (error) {
 
@@ -701,14 +862,19 @@ app.post(
         error
       );
 
+
       res.status(500).json({
-        success: false,
+
+        success:
+          false,
+
         error:
           "Erreur de connexion."
       });
     }
   }
 );
+
 
 // =====================================================
 // CURRENT USER
@@ -735,21 +901,31 @@ app.get(
           [req.user.id]
         );
 
+
       if (
         result.rows.length === 0
       ) {
+
         return res.status(404).json({
-          success: false,
+
+          success:
+            false,
+
           error:
             "Utilisateur introuvable."
         });
       }
 
+
       res.json({
-        success: true,
+
+        success:
+          true,
+
         user:
           result.rows[0]
       });
+
 
     } catch (error) {
 
@@ -758,14 +934,19 @@ app.get(
         error
       );
 
+
       res.status(500).json({
-        success: false,
+
+        success:
+          false,
+
         error:
           "Erreur serveur."
       });
     }
   }
 );
+
 
 // =====================================================
 // TASKS
@@ -787,13 +968,18 @@ app.get(
         [req.user.id]
       );
 
+
     res.json({
-      success: true,
+
+      success:
+        true,
+
       tasks:
         result.rows
     });
   }
 );
+
 
 app.post(
   "/api/tasks",
@@ -805,37 +991,71 @@ app.post(
       priority = "medium"
     } = req.body;
 
+
     if (!title) {
+
       return res.status(400).json({
-        success: false,
+
+        success:
+          false,
+
         error:
           "Titre requis."
       });
     }
 
+
+    const allowedPriorities = [
+      "low",
+      "medium",
+      "high"
+    ];
+
+
+    const cleanPriority =
+      allowedPriorities.includes(
+        priority
+      )
+        ? priority
+        : "medium";
+
+
     const result =
       await pool.query(
         `
         INSERT INTO tasks
-          (user_id, title, priority)
+          (
+            user_id,
+            title,
+            priority
+          )
         VALUES
-          ($1, $2, $3)
+          (
+            $1,
+            $2,
+            $3
+          )
         RETURNING *
         `,
         [
           req.user.id,
-          title,
-          priority
+          String(title).trim(),
+          cleanPriority
         ]
       );
 
+
     res.status(201).json({
-      success: true,
+
+      success:
+        true,
+
       task:
         result.rows[0]
     });
   }
 );
+
 
 app.patch(
   "/api/tasks/:id",
@@ -846,13 +1066,17 @@ app.patch(
       completed
     } = req.body;
 
+
     const result =
       await pool.query(
         `
         UPDATE tasks
+
         SET completed = $1
+
         WHERE id = $2
           AND user_id = $3
+
         RETURNING *
         `,
         [
@@ -862,23 +1086,33 @@ app.patch(
         ]
       );
 
+
     if (
       result.rows.length === 0
     ) {
+
       return res.status(404).json({
-        success: false,
+
+        success:
+          false,
+
         error:
           "Tâche introuvable."
       });
     }
 
+
     res.json({
-      success: true,
+
+      success:
+        true,
+
       task:
         result.rows[0]
     });
   }
 );
+
 
 app.delete(
   "/api/tasks/:id",
@@ -888,6 +1122,7 @@ app.delete(
     await pool.query(
       `
       DELETE FROM tasks
+
       WHERE id = $1
         AND user_id = $2
       `,
@@ -897,68 +1132,88 @@ app.delete(
       ]
     );
 
+
     res.json({
-      success: true
+
+      success:
+        true
     });
   }
 );
 
+
 // =====================================================
 // PLANNING
 // =====================================================
+
+async function getEvents(
+  userId
+) {
+
+  const result =
+    await pool.query(
+      `
+      SELECT *
+      FROM events
+
+      WHERE user_id = $1
+
+      ORDER BY
+        event_date ASC,
+        event_time ASC
+      `,
+      [userId]
+    );
+
+
+  return result.rows;
+}
+
 
 app.get(
   "/api/events",
   authenticate,
   async (req, res) => {
 
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM events
-        WHERE user_id = $1
-        ORDER BY
-          event_date ASC,
-          event_time ASC
-        `,
-        [req.user.id]
+    const events =
+      await getEvents(
+        req.user.id
       );
 
+
     res.json({
-      success: true,
-      events:
-        result.rows
+
+      success:
+        true,
+
+      events
     });
   }
 );
 
-// Compatibilité frontend
+
+// Compatibilité avec ton frontend
 app.get(
   "/api/planning",
   authenticate,
   async (req, res) => {
 
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM events
-        WHERE user_id = $1
-        ORDER BY
-          event_date ASC,
-          event_time ASC
-        `,
-        [req.user.id]
+    const events =
+      await getEvents(
+        req.user.id
       );
 
+
     res.json({
-      success: true,
-      events:
-        result.rows
+
+      success:
+        true,
+
+      events
     });
   }
 );
+
 
 app.post(
   "/api/events",
@@ -971,13 +1226,19 @@ app.post(
       eventTime
     } = req.body;
 
+
     if (!title) {
+
       return res.status(400).json({
-        success: false,
+
+        success:
+          false,
+
         error:
           "Titre requis."
       });
     }
+
 
     const result =
       await pool.query(
@@ -989,25 +1250,37 @@ app.post(
             event_date,
             event_time
           )
+
         VALUES
-          ($1, $2, $3, $4)
+          (
+            $1,
+            $2,
+            $3,
+            $4
+          )
+
         RETURNING *
         `,
         [
           req.user.id,
-          title,
+          String(title).trim(),
           eventDate || null,
           eventTime || null
         ]
       );
 
+
     res.status(201).json({
-      success: true,
+
+      success:
+        true,
+
       event:
         result.rows[0]
     });
   }
 );
+
 
 app.delete(
   "/api/events/:id",
@@ -1017,6 +1290,7 @@ app.delete(
     await pool.query(
       `
       DELETE FROM events
+
       WHERE id = $1
         AND user_id = $2
       `,
@@ -1026,11 +1300,15 @@ app.delete(
       ]
     );
 
+
     res.json({
-      success: true
+
+      success:
+        true
     });
   }
 );
+
 
 // =====================================================
 // NOTES
@@ -1046,19 +1324,27 @@ app.get(
         `
         SELECT *
         FROM notes
+
         WHERE user_id = $1
-        ORDER BY updated_at DESC
+
+        ORDER BY
+          updated_at DESC
         `,
         [req.user.id]
       );
 
+
     res.json({
-      success: true,
+
+      success:
+        true,
+
       notes:
         result.rows
     });
   }
 );
+
 
 app.post(
   "/api/notes",
@@ -1070,13 +1356,19 @@ app.post(
       content = ""
     } = req.body;
 
+
     if (!title) {
+
       return res.status(400).json({
-        success: false,
+
+        success:
+          false,
+
         error:
           "Titre requis."
       });
     }
+
 
     const result =
       await pool.query(
@@ -1087,47 +1379,74 @@ app.post(
             title,
             content
           )
+
         VALUES
-          ($1, $2, $3)
+          (
+            $1,
+            $2,
+            $3
+          )
+
         RETURNING *
         `,
         [
           req.user.id,
-          title,
-          content
+          String(title).trim(),
+          String(content)
         ]
       );
 
+
     res.status(201).json({
-      success: true,
+
+      success:
+        true,
+
       note:
         result.rows[0]
     });
   }
 );
 
+
 app.delete(
   "/api/notes/:id",
   authenticate,
   async (req, res) => {
 
-    await pool.query(
-      `
-      DELETE FROM notes
-      WHERE id = $1
-        AND user_id = $2
-      `,
-      [
-        req.params.id,
-        req.user.id
-      ]
-    );
+    try {
 
-    res.json({
-      success: true
-    });
+      await pool.query(
+        `
+        DELETE FROM notes
+        WHERE id = $1
+          AND user_id = $2
+        `,
+        [
+          req.params.id,
+          req.user.id
+        ]
+      );
+
+      res.json({
+        success: true
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Delete note error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error: "Impossible de supprimer la note."
+      });
+    }
   }
 );
+
 
 // =====================================================
 // BUDGET
@@ -1138,96 +1457,234 @@ app.get(
   authenticate,
   async (req, res) => {
 
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM budgets
-        WHERE user_id = $1
-        ORDER BY created_at DESC
-        `,
-        [req.user.id]
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT *
+          FROM budgets
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          `,
+          [req.user.id]
+        );
+
+      res.json({
+        success: true,
+        budgets: result.rows
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Load budget error:",
+        error
       );
 
-    res.json({
-      success: true,
-      budgets:
-        result.rows
-    });
+      res.status(500).json({
+        success: false,
+        error: "Impossible de charger le budget."
+      });
+    }
   }
 );
+
 
 app.post(
   "/api/budget",
   authenticate,
   async (req, res) => {
 
-    const {
-      description,
-      amount,
-      type
-    } = req.body;
+    try {
 
-    if (
-      !description ||
-      amount === undefined ||
-      ![
-        "income",
-        "expense"
-      ].includes(type)
-    ) {
-      return res.status(400).json({
-        success: false,
-        error:
-          "Données de budget invalides."
-      });
-    }
+      const {
+        description,
+        amount,
+        type
+      } = req.body;
 
-    const result =
-      await pool.query(
-        `
-        INSERT INTO budgets
-          (
-            user_id,
-            description,
-            amount,
-             type
+      const cleanDescription =
+        String(description || "").trim();
+
+      const cleanAmount =
+        Number(amount);
+
+      if (
+        !cleanDescription ||
+        !Number.isFinite(cleanAmount) ||
+        cleanAmount <= 0 ||
+        !["income", "expense"].includes(type)
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          error: "Données de budget invalides."
+        });
+      }
+
+      const result =
+        await pool.query(
+          `
+          INSERT INTO budgets
+            (
+              user_id,
+              description,
+              amount,
+              type
+            )
+          VALUES
+            (
+              $1,
+              $2,
+              $3,
+              $4
+            )
+          RETURNING *
+          `,
+          [
+            req.user.id,
+            cleanDescription,
+            cleanAmount,
+            type
           ]
         );
 
-    res.status(201).json({
-      success: true,
-      budget:
-        result.rows[0]
-    });
+      res.status(201).json({
+        success: true,
+        budget: result.rows[0]
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Create budget error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error: "Impossible d'ajouter cette opération."
+      });
+    }
   }
 );
+
 
 app.delete(
   "/api/budget/:id",
   authenticate,
   async (req, res) => {
 
-    await pool.query(
-      `
-      DELETE FROM budgets
-      WHERE id = $1
-        AND user_id = $2
-      `,
-      [
-        req.params.id,
-        req.user.id
-      ]
-    );
+    try {
 
-    res.json({
-      success: true
-    });
+      await pool.query(
+        `
+        DELETE FROM budgets
+        WHERE id = $1
+          AND user_id = $2
+        `,
+        [
+          req.params.id,
+          req.user.id
+        ]
+      );
+
+      res.json({
+        success: true
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Delete budget error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error: "Impossible de supprimer l'opération."
+      });
+    }
   }
 );
 
+
 // =====================================================
-// GOALS
+// BUDGET SUMMARY
+// =====================================================
+
+app.get(
+  "/api/budget/summary",
+  authenticate,
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN type = 'income'
+                  THEN amount
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS income,
+
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN type = 'expense'
+                  THEN amount
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS expense
+
+          FROM budgets
+
+          WHERE user_id = $1
+          `,
+          [req.user.id]
+        );
+
+      const income =
+        Number(result.rows[0]?.income || 0);
+
+      const expense =
+        Number(result.rows[0]?.expense || 0);
+
+      res.json({
+        success: true,
+        income,
+        expense,
+        balance: income - expense
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Budget summary error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error: "Impossible de calculer le budget."
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// OBJECTIFS
 // =====================================================
 
 app.get(
@@ -1235,189 +1692,302 @@ app.get(
   authenticate,
   async (req, res) => {
 
-    const result =
-      await pool.query(
-        `
-        SELECT *
-        FROM goals
-        WHERE user_id = $1
-        ORDER BY created_at DESC
-        `,
-        [req.user.id]
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT *
+          FROM goals
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          `,
+          [req.user.id]
+        );
+
+      res.json({
+        success: true,
+        goals: result.rows
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Load goals error:",
+        error
       );
 
-    res.json({
-      success: true,
-      goals:
-        result.rows
-    });
+      res.status(500).json({
+        success: false,
+        error: "Impossible de charger les objectifs."
+      });
+    }
   }
 );
+
 
 app.post(
   "/api/goals",
   authenticate,
   async (req, res) => {
 
-    const {
-      title,
-      target,
-      progress = 0
-    } = req.body;
+    try {
 
-    if (
-      !title ||
-      !target ||
-      Number(target) < 1
-    ) {
-      return res.status(400).json({
-        success: false,
-        error:
-          "Objectif invalide."
+      const {
+        title,
+        target
+      } = req.body;
+
+      const cleanTitle =
+        String(title || "").trim();
+
+      const cleanTarget =
+        Number(target);
+
+      if (
+        !cleanTitle ||
+        !Number.isFinite(cleanTarget) ||
+        cleanTarget <= 0
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          error: "Objectif invalide."
+        });
+      }
+
+      const result =
+        await pool.query(
+          `
+          INSERT INTO goals
+            (
+              user_id,
+              title,
+              target,
+              progress
+            )
+          VALUES
+            (
+              $1,
+              $2,
+              $3,
+              0
+            )
+          RETURNING *
+          `,
+          [
+            req.user.id,
+            cleanTitle,
+            Math.round(cleanTarget)
+          ]
+        );
+
+      res.status(201).json({
+        success: true,
+        goal: result.rows[0]
       });
-    }
 
-    const result =
-      await pool.query(
-        `
-        INSERT INTO goals
-          (
-            user_id,
-            title,
-            target,
-            progress
-          )
-        VALUES
-          ($1, $2, $3, $4)
-        RETURNING *
-        `,
-        [
-          req.user.id,
-          title,
-          Number(target),
-          Number(progress) || 0
-        ]
+    } catch (error) {
+
+      console.error(
+        "Create goal error:",
+        error
       );
 
-    res.status(201).json({
-      success: true,
-      goal:
-        result.rows[0]
-    });
+      res.status(500).json({
+        success: false,
+        error: "Impossible de créer l'objectif."
+      });
+    }
   }
 );
+
 
 app.patch(
   "/api/goals/:id",
   authenticate,
   async (req, res) => {
 
-    const {
-      progress,
-      increment
-    } = req.body;
+    try {
 
-    let newProgress;
+      /*
+        Le frontend peut envoyer :
 
-    if (
-      increment !== undefined
-    ) {
+        {
+          "increment": 1
+        }
 
-      const current =
+        OU :
+
+        {
+          "progress": 5
+        }
+      */
+
+      const {
+        progress,
+        increment
+      } = req.body;
+
+      let newProgress;
+
+      if (
+        increment !== undefined
+      ) {
+
+        const current =
+          await pool.query(
+            `
+            SELECT progress, target
+            FROM goals
+            WHERE id = $1
+              AND user_id = $2
+            `,
+            [
+              req.params.id,
+              req.user.id
+            ]
+          );
+
+        if (
+          current.rows.length === 0
+        ) {
+
+          return res.status(404).json({
+            success: false,
+            error: "Objectif introuvable."
+          });
+        }
+
+        newProgress =
+          Number(
+            current.rows[0].progress || 0
+          ) +
+          Number(increment || 0);
+
+        newProgress =
+          Math.max(
+            0,
+            Math.min(
+              newProgress,
+              Number(
+                current.rows[0].target
+              )
+            )
+          );
+
+      } else {
+
+        newProgress =
+          Number(progress);
+
+        if (
+          !Number.isFinite(
+            newProgress
+          )
+        ) {
+
+          return res.status(400).json({
+            success: false,
+            error: "Progression invalide."
+          });
+        }
+
+        newProgress =
+          Math.max(
+            0,
+            Math.round(newProgress)
+          );
+      }
+
+      const result =
         await pool.query(
           `
-          SELECT progress
-          FROM goals
-          WHERE id = $1
-            AND user_id = $2
+          UPDATE goals
+          SET progress = $1
+          WHERE id = $2
+            AND user_id = $3
+          RETURNING *
           `,
           [
+            newProgress,
             req.params.id,
             req.user.id
           ]
         );
 
       if (
-        current.rows.length === 0
+        result.rows.length === 0
       ) {
+
         return res.status(404).json({
           success: false,
-          error:
-            "Objectif introuvable."
+          error: "Objectif introuvable."
         });
       }
 
-      newProgress =
-        Number(
-          current.rows[0].progress
-        ) +
-        Number(increment || 0);
+      res.json({
+        success: true,
+        goal: result.rows[0]
+      });
 
-    } else {
+    } catch (error) {
 
-      newProgress =
-        Number(progress) || 0;
-    }
-
-    const result =
-      await pool.query(
-        `
-        UPDATE goals
-        SET progress = GREATEST(0, $1)
-        WHERE id = $2
-          AND user_id = $3
-        RETURNING *
-        `,
-        [
-          newProgress,
-          req.params.id,
-          req.user.id
-        ]
+      console.error(
+        "Update goal error:",
+        error
       );
 
-    if (
-      result.rows.length === 0
-    ) {
-      return res.status(404).json({
+      res.status(500).json({
         success: false,
-        error:
-          "Objectif introuvable."
+        error: "Impossible de modifier l'objectif."
       });
     }
-
-    res.json({
-      success: true,
-      goal:
-        result.rows[0]
-    });
   }
 );
+
 
 app.delete(
   "/api/goals/:id",
   authenticate,
   async (req, res) => {
 
-    await pool.query(
-      `
-      DELETE FROM goals
-      WHERE id = $1
-        AND user_id = $2
-      `,
-      [
-        req.params.id,
-        req.user.id
-      ]
-    );
+    try {
 
-    res.json({
-      success: true
-    });
+      await pool.query(
+        `
+        DELETE FROM goals
+        WHERE id = $1
+          AND user_id = $2
+        `,
+        [
+          req.params.id,
+          req.user.id
+        ]
+      );
+
+      res.json({
+        success: true
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Delete goal error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error: "Impossible de supprimer l'objectif."
+      });
+    }
   }
 );
 
+
 // =====================================================
-// PREMIUM STATUS
+// PREMIUM — STATUT
 // =====================================================
 
 app.get(
@@ -1432,11 +2002,20 @@ app.get(
           `
           SELECT
             u.premium,
+
             s.status,
+
             s.plan,
-            s.expires_at,
+
             s.provider,
-            s.provider_subscription_id
+
+            s.provider_customer_id,
+
+            s.provider_subscription_id,
+
+            s.started_at,
+
+            s.expires_at
 
           FROM users u
 
@@ -1452,35 +2031,38 @@ app.get(
           [req.user.id]
         );
 
-      const user =
-        result.rows[0];
+      const row =
+        result.rows[0] || {};
 
       res.json({
+
         success: true,
 
         premium:
-          user?.premium === true,
+          row.premium === true,
 
         subscription: {
+
           status:
-            user?.status ||
-            "inactive",
+            row.status || "inactive",
 
           plan:
-            user?.plan ||
-            null,
-
-          expiresAt:
-            user?.expires_at ||
-            null,
+            row.plan || null,
 
           provider:
-            user?.provider ||
-            null,
+            row.provider || null,
+
+          providerCustomerId:
+            row.provider_customer_id || null,
 
           providerSubscriptionId:
-            user?.provider_subscription_id ||
-            null
+            row.provider_subscription_id || null,
+
+          startedAt:
+            row.started_at || null,
+
+          expiresAt:
+            row.expires_at || null
         }
       });
 
@@ -1493,15 +2075,15 @@ app.get(
 
       res.status(500).json({
         success: false,
-        error:
-          "Impossible de récupérer Premium."
+        error: "Impossible de récupérer Premium."
       });
     }
   }
 );
 
+
 // =====================================================
-// PREMIUM PAYMENT - TCHOTCHOM
+// PREMIUM — CRÉATION DU PAIEMENT
 // =====================================================
 
 app.post(
@@ -1511,7 +2093,62 @@ app.post(
 
     try {
 
-      // Vérification de la configuration
+      const {
+        amount,
+        currency = "HTG",
+        paymentMethod = "moncash"
+      } = req.body;
+
+      const cleanAmount =
+        Number(amount);
+
+      const cleanMethod =
+        String(
+          paymentMethod || ""
+        ).toLowerCase();
+
+      if (
+        !Number.isFinite(cleanAmount) ||
+        cleanAmount <= 0
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          paymentReady: false,
+          error: "Montant invalide."
+        });
+      }
+
+      const allowedMethods = [
+        "moncash",
+        "tchotchom"
+      ];
+
+      if (
+        !allowedMethods.includes(
+          cleanMethod
+        )
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          paymentReady: false,
+          error: "Méthode de paiement invalide."
+        });
+      }
+
+
+      /*
+        IMPORTANT :
+
+        Cette route ne donne PAS Premium
+        automatiquement.
+
+        Premium sera activé seulement
+        après confirmation réelle du paiement.
+      */
+
+
       if (
         !TCHOTCHOM_API_KEY ||
         !TCHOTCHOM_SECRET_KEY ||
@@ -1519,218 +2156,66 @@ app.post(
       ) {
 
         return res.status(503).json({
+
           success: false,
+
           paymentReady: false,
+
           error:
-            "Tchotchom n'est pas complètement configuré dans Render."
+            "Le paiement n'est pas encore configuré côté serveur."
         });
       }
 
-      // Données reçues du frontend
-      const amount =
-        Number(req.body.amount);
 
-      const currency =
-        String(
-          req.body.currency ||
-          "HTG"
-        ).toUpperCase();
-
-      const paymentMethod =
-        String(
-          req.body.paymentMethod ||
-          "moncash"
-        ).toLowerCase();
-
-      // Validation du montant
       if (
-        !Number.isFinite(amount) ||
-        amount <= 0
+        !TCHOTCHOM_PAYMENT_URL
       ) {
 
-        return res.status(400).json({
+        return res.status(503).json({
+
           success: false,
+
           paymentReady: false,
+
           error:
-            "Montant de paiement invalide."
+            "L'URL de paiement Tchotchom manque dans Render."
         });
       }
 
-      // Validation devise
-      if (
-        !["HTG", "USD"].includes(
-          currency
-        )
-      ) {
 
-        return res.status(400).json({
-          success: false,
-          paymentReady: false,
-          error:
-            "Devise non supportée."
-        });
-      }
+      /*
+        Référence unique Lumio.
 
-      // Validation moyen de paiement
-      if (
-        ![
-          "moncash",
-          "card"
-        ].includes(paymentMethod)
-      ) {
+        Elle permet de retrouver
+        le paiement dans la base.
+      */
 
-        return res.status(400).json({
-          success: false,
-          paymentReady: false,
-          error:
-            "Méthode de paiement non supportée."
-        });
-      }
-
-      // Référence unique
       const reference =
-        `LUMIO-${req.user.id}-${Date.now()}`;
+        "LUMIO-" +
+        Date.now() +
+        "-" +
+        req.user.id;
 
-      const description =
-        "Abonnement Lumio Premium";
 
-      // =================================================
-      // APPEL TCHOTCHOM
-      // =================================================
+      /*
+        On enregistre d'abord
+        le paiement comme pending.
+      */
 
-      const tchotchomResponse =
-        await fetch(
-          `${TCHOTCHOM_BASE_URL}/payments`,
-          {
-            method: "POST",
-
-            headers:
-              getTchotchomHeaders(),
-
-            body:
-              JSON.stringify({
-
-                amount:
-
-                  amount,
-
-                currency:
-
-                  currency,
-
-                payee_email:
-
-                  TCHOTCHOM_PAYEE_EMAIL,
-
-                description:
-
-                  description,
-
-                reference:
-
-                  reference,
-
-                payment_method:
-
-                  paymentMethod
-              })
-          }
-        );
-
-      // Lire la réponse
-      let data = null;
-
-      try {
-
-        data =
-          await tchotchomResponse.json();
-
-      } catch {
-
-        data = null;
-      }
-
-      console.log(
-        "Tchotchom HTTP:",
-        tchotchomResponse.status
-      );
-
-      console.log(
-        "Tchotchom response:",
-        data
-      );
-
-      // Tchotchom a refusé
-      if (
-        !tchotchomResponse.ok
-      ) {
-
-        const errorMessage =
-          data?.message ||
-          data?.error ||
-          data?.errors?.[0]?.message ||
-          `Tchotchom a retourné HTTP ${tchotchomResponse.status}.`;
-
-        return res.status(
-          tchotchomResponse.status
-        ).json({
-          success: false,
-          paymentReady: false,
-          error:
-            errorMessage
-        });
-      }
-
-      // Récupérer le paiement
-      const payment =
-        data?.data ||
-        data?.payment ||
-        data;
-
-      if (!payment) {
-
-        return res.status(502).json({
-          success: false,
-          paymentReady: false,
-          error:
-            "Réponse Tchotchom invalide."
-        });
-      }
-
-      const providerPaymentId =
-        payment?.id
-          ? String(payment.id)
-          : null;
-
-      const providerReference =
-        payment?.reference ||
-        reference;
-
-      const providerStatus =
-        String(
-          payment?.status ||
-          "pending"
-        ).toLowerCase();
-
-      // =================================================
-      // SAUVEGARDER LE PAIEMENT
-      // =================================================
-
-      const paymentResult =
+      const inserted =
         await pool.query(
           `
           INSERT INTO payments
             (
               user_id,
               provider,
-              provider_payment_id,
               reference,
               amount,
               currency,
               payment_method,
-              status,
-              raw_response
+              status
             )
+
           VALUES
             (
               $1,
@@ -1739,103 +2224,92 @@ app.post(
               $4,
               $5,
               $6,
-              $7,
-              $8,
-              $9
+              'pending'
             )
+
           RETURNING *
           `,
           [
             req.user.id,
-            "tchotchom",
-            providerPaymentId,
-            providerReference,
-            amount,
+            cleanMethod,
+            reference,
+            cleanAmount,
             currency,
-            paymentMethod,
-            providerStatus,
-            JSON.stringify(data)
+            cleanMethod
           ]
         );
 
-      // =================================================
-      // SI LE PAIEMENT EST DÉJÀ CONFIRMÉ
-      // =================================================
 
-      const successfulStatuses = [
-        "completed",
-        "complete",
-        "paid",
-        "success",
-        "successful"
-      ];
+      /*
+        Si Tchotchom fournit une URL
+        de paiement hébergée, on peut
+        la renvoyer au frontend.
 
-      const paymentCompleted =
-        successfulStatuses.includes(
-          providerStatus
+        Le serveur ne fabrique jamais
+        une fausse URL.
+      */
+
+      let paymentUrl =
+        null;
+
+
+      /*
+        Si TCHOTCHOM_PAYMENT_URL
+        correspond à une page de paiement
+        déjà configurée chez le fournisseur,
+        on la retourne avec les informations
+        Lumio.
+
+        NOTE :
+        le frontend ne doit pas considérer
+        cela comme un paiement réussi.
+      */
+
+      try {
+
+        const url =
+          new URL(
+            TCHOTCHOM_PAYMENT_URL
+          );
+
+        url.searchParams.set(
+          "reference",
+          reference
         );
 
-      if (paymentCompleted) {
-
-        const startedAt =
-          new Date();
-
-        const expiresAt =
-          new Date();
-
-        // Premium valable 30 jours
-        expiresAt.setDate(
-          expiresAt.getDate() + 30
+        url.searchParams.set(
+          "amount",
+          String(cleanAmount)
         );
 
-        await pool.query(
-          `
-          UPDATE users
-          SET premium = TRUE
-          WHERE id = $1
-          `,
-          [req.user.id]
+        url.searchParams.set(
+          "currency",
+          String(currency)
         );
 
-        await pool.query(
-          `
-          INSERT INTO subscriptions
-            (
-              user_id,
-              status,
-              plan,
-              provider,
-              provider_subscription_id,
-              started_at,
-              expires_at,
-              updated_at
-            )
-          VALUES
-            (
-              $1,
-              'active',
-              'premium_monthly',
-              'tchotchom',
-              $2,
-              $3,
-              $4,
-              CURRENT_TIMESTAMP
-            )
-          `,
-          [
-            req.user.id,
-            providerPaymentId,
-            startedAt,
-            expiresAt
-          ]
+        url.searchParams.set(
+          "email",
+          TCHOTCHOM_PAYEE_EMAIL
         );
+
+        paymentUrl =
+          url.toString();
+
+      } catch {
+
+        return res.status(500).json({
+
+          success: false,
+
+          paymentReady: false,
+
+          error:
+            "TCHOTCHOM_PAYMENT_URL est invalide."
+        });
       }
 
-      // =================================================
-      // RÉPONSE AU FRONTEND
-      // =================================================
 
-      return res.status(201).json({
+      res.status(201).json({
 
         success: true,
 
@@ -1844,51 +2318,48 @@ app.post(
         payment: {
 
           id:
-            providerPaymentId,
+            inserted.rows[0].id,
+
+          reference,
 
           amount:
-            amount,
+            cleanAmount,
 
-          currency:
-            currency,
-
-          status:
-            providerStatus,
-
-          reference:
-            providerReference,
+          currency,
 
           paymentMethod:
-            payment?.payment_method ||
-            paymentMethod
-        },
+            cleanMethod,
 
-        premiumActivated:
-          paymentCompleted,
+          status:
+            "pending",
 
-        databasePaymentId:
-          paymentResult.rows[0].id
+          paymentUrl
+        }
       });
 
     } catch (error) {
 
       console.error(
-        "Erreur Premium/Tchotchom:",
+        "Create payment error:",
         error
       );
 
-      return res.status(500).json({
+      res.status(500).json({
+
         success: false,
+
         paymentReady: false,
+
         error:
-          "Impossible de créer le paiement Premium."
+          "Impossible de créer le paiement."
       });
     }
   }
 );
 
+
 // =====================================================
-// HISTORIQUE DES PAIEMENTS
+// PREMIUM — LISTE DES PAIEMENTS DE L'UTILISATEUR
 // =====================================================
 
 app.get(
@@ -1910,16 +2381,22 @@ app.get(
             currency,
             payment_method,
             status,
-            created_at
+            created_at,
+            updated_at
+
           FROM payments
+
           WHERE user_id = $1
+
           ORDER BY created_at DESC
           `,
           [req.user.id]
         );
 
       res.json({
+
         success: true,
+
         payments:
           result.rows
       });
@@ -1927,12 +2404,14 @@ app.get(
     } catch (error) {
 
       console.error(
-        "Payment history error:",
+        "Payments error:",
         error
       );
 
       res.status(500).json({
+
         success: false,
+
         error:
           "Impossible de récupérer les paiements."
       });
@@ -1940,23 +2419,1049 @@ app.get(
   }
 );
 
+
 // =====================================================
-// ROUTE 404
+// PREMIUM — VÉRIFICATION DU PAIEMENT
+// =====================================================
+
+app.get(
+  "/api/subscription/payment/:reference",
+  authenticate,
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            id,
+            provider,
+            provider_payment_id,
+            reference,
+            amount,
+            currency,
+            payment_method,
+            status,
+            created_at,
+            updated_at
+
+          FROM payments
+
+          WHERE reference = $1
+            AND user_id = $2
+
+          LIMIT 1
+          `,
+          [
+            req.params.reference,
+            req.user.id
+          ]
+        );
+
+
+      if (
+        result.rows.length === 0
+      ) {
+
+        return res.status(404).json({
+
+          success: false,
+
+          error:
+            "Paiement introuvable."
+        });
+      }
+
+
+      const payment =
+        result.rows[0];
+
+
+      res.json({
+
+        success: true,
+
+        paid:
+          payment.status === "paid",
+
+        payment
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Payment status error:",
+        error
+      );
+
+      res.status(500).json({
+
+        success: false,
+
+        error:
+          "Impossible de vérifier le paiement."
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// PREMIUM — ACTIVATION INTERNE
+// =====================================================
+
+/*
+  Cette route est volontairement protégée
+  par une clé serveur.
+
+  Elle sert au webhook/provider
+  pour confirmer un paiement.
+
+  NE PAS appeler cette route depuis
+  le frontend.
+*/
+
+app.post(
+  "/api/internal/payment/confirm",
+  async (req, res) => {
+
+    try {
+
+      const internalKey =
+        process.env.INTERNAL_PAYMENT_KEY;
+
+      const receivedKey =
+        req.headers["x-internal-key"];
+
+      if (
+        !internalKey ||
+        receivedKey !== internalKey
+      ) {
+
+        return res.status(401).json({
+
+          success: false,
+
+          error:
+            "Non autorisé."
+        });
+      }
+
+
+      const {
+        reference,
+        providerPaymentId,
+        status
+      } = req.body;
+
+
+      if (
+        !reference
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            "Référence requise."
+        });
+      }
+
+
+      const normalizedStatus =
+        String(
+          status || ""
+        ).toLowerCase();
+
+
+      if (
+        normalizedStatus !== "paid"
+      ) {
+
+        await pool.query(
+          `
+          UPDATE payments
+
+          SET
+            status = $1,
+            provider_payment_id = COALESCE(
+              $2,
+              provider_payment_id
+            ),
+            updated_at = CURRENT_TIMESTAMP
+
+          WHERE reference = $3
+          `,
+          [
+            normalizedStatus || "failed",
+            providerPaymentId || null,
+            reference
+          ]
+        );
+
+                return res.json({
+          success: true,
+          updated: true,
+          status: normalizedStatus || "failed"
+        });
+      }
+
+
+      // =================================================
+      // PAIEMENT CONFIRMÉ
+      // =================================================
+
+      const paymentResult =
+        await pool.query(
+          `
+          UPDATE payments
+
+          SET
+            status = 'paid',
+
+            provider_payment_id =
+              COALESCE(
+                $1,
+                provider_payment_id
+              ),
+
+            updated_at =
+              CURRENT_TIMESTAMP
+
+          WHERE reference = $2
+
+          RETURNING
+            *
+          `,
+          [
+            providerPaymentId || null,
+            reference
+          ]
+        );
+
+
+      if (
+        paymentResult.rows.length === 0
+      ) {
+
+        return res.status(404).json({
+          success: false,
+          error:
+            "Paiement introuvable."
+        });
+      }
+
+
+      const payment =
+        paymentResult.rows[0];
+
+
+      // =================================================
+      // ACTIVATION PREMIUM
+      // =================================================
+
+      const startedAt =
+        new Date();
+
+
+      const expiresAt =
+        new Date(
+          startedAt.getTime() +
+          30 * 24 * 60 * 60 * 1000
+        );
+
+
+      await pool.query(
+        `
+        UPDATE users
+
+        SET premium = TRUE
+
+        WHERE id = $1
+        `,
+        [
+          payment.user_id
+        ]
+      );
+
+
+      // =================================================
+      // CRÉATION / MISE À JOUR ABONNEMENT
+      // =================================================
+
+      await pool.query(
+        `
+        INSERT INTO subscriptions
+          (
+            user_id,
+            status,
+            plan,
+            provider,
+            provider_customer_id,
+            provider_subscription_id,
+            started_at,
+            expires_at,
+            updated_at
+          )
+
+        VALUES
+          (
+            $1,
+            'active',
+            'premium_monthly',
+            $2,
+            NULL,
+            $3,
+            $4,
+            $5,
+            CURRENT_TIMESTAMP
+          )
+
+        `,
+        [
+          payment.user_id,
+          payment.provider,
+          providerPaymentId || null,
+          startedAt,
+          expiresAt
+        ]
+      );
+
+
+      return res.json({
+        success: true,
+        premium: true,
+        status: "paid",
+        expiresAt
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "Internal payment confirmation error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        error:
+          "Impossible de confirmer le paiement."
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// PREMIUM — ANNULATION D'UN PAIEMENT
+// =====================================================
+
+app.post(
+  "/api/subscription/payment/:reference/cancel",
+  authenticate,
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          UPDATE payments
+
+          SET
+            status = 'cancelled',
+            updated_at =
+              CURRENT_TIMESTAMP
+
+          WHERE reference = $1
+            AND user_id = $2
+            AND status = 'pending'
+
+          RETURNING *
+          `,
+          [
+            req.params.reference,
+            req.user.id
+          ]
+        );
+
+
+      if (
+        result.rows.length === 0
+      ) {
+
+        return res.status(404).json({
+          success: false,
+          error:
+            "Paiement en attente introuvable."
+        });
+      }
+
+
+      res.json({
+        success: true,
+        payment:
+          result.rows[0]
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "Cancel payment error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error:
+          "Impossible d'annuler le paiement."
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// PREMIUM — EXPIRATION AUTOMATIQUE
+// =====================================================
+
+async function refreshExpiredSubscriptions() {
+
+  if (!pool) {
+    return;
+  }
+
+
+  try {
+
+    const expired =
+      await pool.query(
+        `
+        SELECT
+          id,
+          user_id
+
+        FROM subscriptions
+
+        WHERE status = 'active'
+
+          AND expires_at IS NOT NULL
+
+          AND expires_at <= CURRENT_TIMESTAMP
+        `
+      );
+
+
+    for (
+      const subscription
+      of expired.rows
+    ) {
+
+      await pool.query(
+        `
+        UPDATE subscriptions
+
+        SET
+          status = 'expired',
+          updated_at =
+            CURRENT_TIMESTAMP
+
+        WHERE id = $1
+        `,
+        [
+          subscription.id
+        ]
+      );
+
+
+      /*
+        Vérifie s'il existe
+        encore un abonnement actif.
+      */
+
+      const active =
+        await pool.query(
+          `
+          SELECT id
+
+          FROM subscriptions
+
+          WHERE user_id = $1
+
+            AND status = 'active'
+
+            AND (
+              expires_at IS NULL
+              OR expires_at > CURRENT_TIMESTAMP
+            )
+
+          LIMIT 1
+          `,
+          [
+            subscription.user_id
+          ]
+        );
+
+
+      if (
+        active.rows.length === 0
+      ) {
+
+        await pool.query(
+          `
+          UPDATE users
+
+          SET premium = FALSE
+
+          WHERE id = $1
+          `,
+          [
+            subscription.user_id
+          ]
+        );
+      }
+    }
+
+
+  } catch (error) {
+
+    console.error(
+      "Subscription expiration error:",
+      error
+    );
+  }
+}
+
+
+// =====================================================
+// PREMIUM — VÉRIFICATION MANUELLE
+// =====================================================
+
+app.post(
+  "/api/subscription/refresh",
+  authenticate,
+  async (req, res) => {
+
+    try {
+
+      await refreshExpiredSubscriptions();
+
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            u.premium,
+
+            s.status,
+
+            s.plan,
+
+            s.provider,
+
+            s.started_at,
+
+            s.expires_at
+
+          FROM users u
+
+          LEFT JOIN subscriptions s
+            ON s.user_id = u.id
+
+          WHERE u.id = $1
+
+          ORDER BY s.id DESC
+
+          LIMIT 1
+          `,
+          [
+            req.user.id
+          ]
+        );
+
+
+      const row =
+        result.rows[0] || {};
+
+
+      res.json({
+
+        success: true,
+
+        premium:
+          row.premium === true,
+
+        subscription: {
+
+          status:
+            row.status || "inactive",
+
+          plan:
+            row.plan || null,
+
+          provider:
+            row.provider || null,
+
+          startedAt:
+            row.started_at || null,
+
+          expiresAt:
+            row.expires_at || null
+        }
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "Refresh subscription error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error:
+          "Impossible de vérifier Premium."
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// FOCUS
+// =====================================================
+
+/*
+  Le minuteur Focus fonctionne principalement
+  côté frontend.
+
+  Cette route permet simplement de sauvegarder
+  les minutes réalisées par l'utilisateur.
+*/
+
+
+app.post(
+  "/api/focus/session",
+  authenticate,
+  async (req, res) => {
+
+    try {
+
+      const minutes =
+        Number(
+          req.body.minutes
+        );
+
+
+      if (
+        !Number.isFinite(minutes) ||
+        minutes <= 0
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          error:
+            "Nombre de minutes invalide."
+        });
+      }
+
+
+      /*
+        On crée la table si elle n'existe pas.
+      */
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS focus_sessions (
+
+          id SERIAL PRIMARY KEY,
+
+          user_id INTEGER
+            REFERENCES users(id)
+            ON DELETE CASCADE,
+
+          minutes INTEGER
+            NOT NULL,
+
+          created_at TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+
+      const result =
+        await pool.query(
+          `
+          INSERT INTO focus_sessions
+            (
+              user_id,
+              minutes
+            )
+
+          VALUES
+            (
+              $1,
+              $2
+            )
+
+          RETURNING *
+          `,
+          [
+            req.user.id,
+            Math.round(minutes)
+          ]
+        );
+
+
+      res.status(201).json({
+        success: true,
+        session:
+          result.rows[0]
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "Focus session error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error:
+          "Impossible d'enregistrer la session Focus."
+      });
+    }
+  }
+);
+
+
+app.get(
+  "/api/focus/stats",
+  authenticate,
+  async (req, res) => {
+
+    try {
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS focus_sessions (
+
+          id SERIAL PRIMARY KEY,
+
+          user_id INTEGER
+            REFERENCES users(id)
+            ON DELETE CASCADE,
+
+          minutes INTEGER
+            NOT NULL,
+
+          created_at TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            COALESCE(
+              SUM(minutes),
+              0
+            ) AS total_minutes,
+
+            COUNT(*) AS sessions
+
+          FROM focus_sessions
+
+          WHERE user_id = $1
+          `,
+          [
+            req.user.id
+          ]
+        );
+
+
+      res.json({
+
+        success: true,
+
+        totalMinutes:
+          Number(
+            result.rows[0]?.total_minutes || 0
+          ),
+
+        sessions:
+          Number(
+            result.rows[0]?.sessions || 0
+          )
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "Focus stats error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error:
+          "Impossible de récupérer les statistiques Focus."
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// DASHBOARD
+// =====================================================
+
+app.get(
+  "/api/dashboard",
+  authenticate,
+  async (req, res) => {
+
+    try {
+
+      const tasks =
+        await pool.query(
+          `
+          SELECT
+            COUNT(*) FILTER (
+              WHERE completed = FALSE
+            ) AS remaining,
+
+            COUNT(*) AS total
+
+          FROM tasks
+
+          WHERE user_id = $1
+          `,
+          [
+            req.user.id
+          ]
+        );
+
+
+      const goals =
+        await pool.query(
+          `
+          SELECT
+            COUNT(*) AS total,
+
+            COALESCE(
+              SUM(progress),
+              0
+            ) AS progress,
+
+            COALESCE(
+              SUM(target),
+              0
+            ) AS target
+
+          FROM goals
+
+          WHERE user_id = $1
+          `,
+          [
+            req.user.id
+          ]
+        );
+
+
+      const budget =
+        await pool.query(
+          `
+          SELECT
+
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN type = 'income'
+                  THEN amount
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS income,
+
+            COALESCE(
+              SUM(
+                CASE
+                  WHEN type = 'expense'
+                  THEN amount
+                  ELSE 0
+                END
+              ),
+              0
+            ) AS expense
+
+          FROM budgets
+
+          WHERE user_id = $1
+          `,
+          [
+            req.user.id
+          ]
+        );
+
+
+      const user =
+        await pool.query(
+          `
+          SELECT
+            id,
+            email,
+            premium
+
+          FROM users
+
+          WHERE id = $1
+          `,
+          [
+            req.user.id
+          ]
+        );
+
+
+      const taskData =
+        tasks.rows[0] || {};
+
+      const goalData =
+        goals.rows[0] || {};
+
+      const budgetData =
+        budget.rows[0] || {};
+
+      const income =
+        Number(
+          budgetData.income || 0
+        );
+
+      const expense =
+        Number(
+          budgetData.expense || 0
+        );
+
+      const target =
+        Number(
+          goalData.target || 0
+        );
+
+      const progress =
+        Number(
+          goalData.progress || 0
+        );
+
+
+      let goalPercentage = 0;
+
+
+      if (target > 0) {
+
+        goalPercentage =
+          Math.round(
+            Math.min(
+              100,
+              (progress / target) * 100
+            )
+          );
+      }
+
+
+      res.json({
+
+        success: true,
+
+        user:
+          user.rows[0] || null,
+
+        tasks: {
+
+          remaining:
+            Number(
+              taskData.remaining || 0
+            ),
+
+          total:
+            Number(
+              taskData.total || 0
+            )
+        },
+
+        goals: {
+
+          total:
+            Number(
+              goalData.total || 0
+            ),
+
+          progress,
+
+          target,
+
+          percentage:
+            goalPercentage
+        },
+
+        budget: {
+
+          income,
+
+          expense,
+
+          balance:
+            income - expense
+        }
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "Dashboard error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error:
+          "Impossible de charger le tableau de bord."
+      });
+    }
+  }
+);
+
+
+// =====================================================
+// 404 API
 // =====================================================
 
 app.use(
+  "/api",
   (req, res) => {
 
     res.status(404).json({
+
       success: false,
+
       error:
-        "Resource not found"
+        "Route API introuvable."
     });
   }
 );
 
+
 // =====================================================
-// ERREUR SERVEUR
+// ERREUR GÉNÉRALE
 // =====================================================
 
 app.use(
@@ -1967,23 +3472,64 @@ app.use(
       error
     );
 
+
+    if (
+      res.headersSent
+    ) {
+
+      return next(error);
+    }
+
+
     res.status(500).json({
+
       success: false,
+
       error:
         "Erreur interne du serveur."
     });
   }
 );
 
+
 // =====================================================
-// START SERVER
+// DÉMARRAGE
 // =====================================================
 
 async function startServer() {
 
   try {
 
+    if (!pool) {
+
+      throw new Error(
+        "DATABASE_URL manque."
+      );
+    }
+
+
     await initializeDatabase();
+
+
+    /*
+      Vérification des abonnements expirés
+      au démarrage.
+    */
+
+    await refreshExpiredSubscriptions();
+
+
+    /*
+      Vérification périodique.
+
+      Toutes les 10 minutes.
+    */
+
+    setInterval(
+      refreshExpiredSubscriptions,
+      10 * 60 * 1000
+    );
+
 
     app.listen(
       PORT,
@@ -1991,16 +3537,68 @@ async function startServer() {
       () => {
 
         console.log(
-          `Lumio Backend 4.0.0 running on port ${PORT}`
+          "======================================"
         );
 
+        console.log(
+          "Lumio Backend 5.0.0"
+        );
+
+        console.log(
+          `Running on port ${PORT}`
+        );
+
+        console.log(
+          "Database: PostgreSQL"
+        );
+
+        console.log(
+          "Authentication: JWT"
+        );
+
+        console.log(
+          "Tasks: ON"
+        );
+
+        console.log(
+          "Planning: ON"
+        );
+
+        console.log(
+          "Notes: ON"
+        );
+
+        console.log(
+          "Budget: ON"
+        );
+
+        console.log(
+          "Goals: ON"
+        );
+
+        console.log(
+          "Focus: ON"
+        );
+
+        console.log(
+          "Premium: ON"
+        );
+
+        console.log(
+          "Payments: ON"
+        );
+
+        console.log(
+          "======================================"
+        );
       }
     );
+
 
   } catch (error) {
 
     console.error(
-      "Impossible de démarrer Lumio:",
+      "Startup error:",
       error
     );
 
@@ -2008,4 +3606,7 @@ async function startServer() {
   }
 }
 
+
 startServer();
+
+          
