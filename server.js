@@ -24,6 +24,29 @@ if (!JWT_SECRET) {
 }
 
 // =====================================================
+// TCHOTCHOM
+// =====================================================
+
+const TCHOTCHOM_API_KEY = process.env.TCHOTCHOM_API_KEY;
+const TCHOTCHOM_SECRET_KEY = process.env.TCHOTCHOM_SECRET_KEY;
+const TCHOTCHOM_PAYEE_EMAIL = process.env.TCHOTCHOM_PAYEE_EMAIL;
+
+const TCHOTCHOM_BASE_URL =
+  "https://www.sbfastgroup.com/api/v1";
+
+if (!TCHOTCHOM_API_KEY) {
+  console.warn("ATTENTION : TCHOTCHOM_API_KEY manque.");
+}
+
+if (!TCHOTCHOM_SECRET_KEY) {
+  console.warn("ATTENTION : TCHOTCHOM_SECRET_KEY manque.");
+}
+
+if (!TCHOTCHOM_PAYEE_EMAIL) {
+  console.warn("ATTENTION : TCHOTCHOM_PAYEE_EMAIL manque.");
+}
+
+// =====================================================
 // MIDDLEWARE
 // =====================================================
 
@@ -104,6 +127,28 @@ function authenticate(req, res, next) {
       error: "Session invalide ou expirée."
     });
   }
+}
+
+// =====================================================
+// TCHOTCHOM HELPER
+// =====================================================
+
+function getTchotchomHeaders() {
+  if (!TCHOTCHOM_API_KEY || !TCHOTCHOM_SECRET_KEY) {
+    throw new Error(
+      "Les identifiants Tchotchom ne sont pas configurés."
+    );
+  }
+
+  const credentials = Buffer.from(
+    `${TCHOTCHOM_API_KEY}:${TCHOTCHOM_SECRET_KEY}`
+  ).toString("base64");
+
+  return {
+    Authorization: `Basic ${credentials}`,
+    "Content-Type": "application/json",
+    Accept: "application/json"
+  };
 }
 
 // =====================================================
@@ -219,7 +264,7 @@ app.get("/", async (req, res) => {
     app: "Lumio",
     backend: "online",
     database,
-    version: "3.0.0",
+    version: "3.1.0",
     features: [
       "authentication",
       "postgresql",
@@ -231,6 +276,7 @@ app.get("/", async (req, res) => {
       "focus",
       "premium",
       "subscription-status",
+      "tchotchom",
       "pwa-ready"
     ]
   });
@@ -256,7 +302,12 @@ app.get("/api/health", async (req, res) => {
     success: true,
     backend: "online",
     database,
-    version: "3.0.0"
+    version: "3.1.0",
+    tchotchomConfigured: Boolean(
+      TCHOTCHOM_API_KEY &&
+      TCHOTCHOM_SECRET_KEY &&
+      TCHOTCHOM_PAYEE_EMAIL
+    )
   });
 });
 
@@ -280,7 +331,8 @@ app.post("/api/auth/register", async (req, res) => {
     if (password.length < 6) {
       return res.status(400).json({
         success: false,
-        error: "Le mot de passe doit contenir au moins 6 caractères."
+        error:
+          "Le mot de passe doit contenir au moins 6 caractères."
       });
     }
 
@@ -845,7 +897,9 @@ app.get(
           u.premium,
           s.status,
           s.plan,
-          s.expires_at
+          s.expires_at,
+          s.provider,
+          s.provider_subscription_id
         FROM users u
         LEFT JOIN subscriptions s
           ON s.user_id = u.id
@@ -864,7 +918,10 @@ app.get(
         subscription: {
           status: user?.status || "inactive",
           plan: user?.plan || null,
-          expiresAt: user?.expires_at || null
+          expiresAt: user?.expires_at || null,
+          provider: user?.provider || null,
+          providerSubscriptionId:
+            user?.provider_subscription_id || null
         }
       });
     } catch (error) {
@@ -879,61 +936,35 @@ app.get(
 );
 
 // =====================================================
-// PREMIUM CHECKOUT PLACEHOLDER
+// PREMIUM PAYMENT - TCHOTCHOM
 // =====================================================
 
 app.post(
   "/api/subscription/create",
   authenticate,
   async (req, res) => {
-
-    /*
-      IMPORTANT :
-
-      Cette route ne prétend PAS avoir effectué
-      un paiement.
-
-      Elle sera reliée au prestataire de paiement
-      choisi pour Lumio.
-
-      Le serveur devra créer une vraie session
-      de paiement puis retourner une URL sécurisée.
-    */
-
-    res.status(501).json({
-      success: false,
-      paymentReady: false,
-      error:
-        "Le fournisseur de paiement n'est pas encore configuré."
-    });
-  }
-);
-
-// =====================================================
-// START
-// =====================================================
-
-async function startServer() {
-  try {
-    await initializeDatabase();
-
-    app.listen(
-      PORT,
-      "0.0.0.0",
-      () => {
-        console.log(
-          `Lumio Backend 3.0.0 running on port ${PORT}`
-        );
+    try {
+      if (
+        !TCHOTCHOM_API_KEY ||
+        !TCHOTCHOM_SECRET_KEY ||
+        !TCHOTCHOM_PAYEE_EMAIL
+      ) {
+        return res.status(503).json({
+          success: false,
+          paymentReady: false,
+          error:
+            "Tchotchom n'est pas complètement configuré."
+        });
       }
-    );
-  } catch (error) {
-    console.error(
-      "Impossible de démarrer Lumio:",
-      error
-    );
 
-    process.exit(1);
-  }
-}
+      const amount = Number(req.body.amount);
 
-startServer();
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Montant Premium invalide."
+        });
+      }
+
+      const currency =
+        String(req.b
