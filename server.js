@@ -1135,3 +1135,31 @@ app.post(
     }
   }
 );
+// =====================================================
+// START SERVER
+// =====================================================
+
+async function startServer() {
+  try {
+    await initializeDatabase();
+
+    app.listen(
+      PORT,
+      "0.0.0.0",
+      () => {
+        console.log(
+          `Lumio Backend 3.0.0 running on port ${PORT}`
+        );
+      }
+    );
+  } catch (error) {
+    console.error(
+      "Impossible de démarrer Lumio:",
+      error
+    );
+
+    process.exit(1);
+  }
+}
+
+startServer();
