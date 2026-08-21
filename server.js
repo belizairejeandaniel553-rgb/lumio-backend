@@ -967,4 +967,16 @@ app.post(
       }
 
       const currency =
-        String(req.b
+  String(req.body.currency || "HTG")
+    .trim()
+    .toUpperCase();
+
+const paymentMethod =
+  String(req.body.paymentMethod || "moncash")
+    .trim()
+    .toLowerCase();
+
+const reference =
+  `LUMIO-PREMIUM-${req.user.id}-${Date.now()}`;
+
+const description = "Lumio Premium"; 
