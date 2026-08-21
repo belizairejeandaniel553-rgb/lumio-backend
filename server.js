@@ -934,7 +934,6 @@ app.get(
     }
   }
 );
-
 // =====================================================
 // PREMIUM PAYMENT - TCHOTCHOM
 // =====================================================
@@ -944,6 +943,10 @@ app.post(
   authenticate,
   async (req, res) => {
     try {
+      // -------------------------------------------------
+      // Vérification de la configuration Tchotchom
+      // -------------------------------------------------
+
       if (
         !TCHOTCHOM_API_KEY ||
         !TCHOTCHOM_SECRET_KEY ||
@@ -953,30 +956,182 @@ app.post(
           success: false,
           paymentReady: false,
           error:
-            "Tchotchom n'est pas complètement configuré."
+            "Tchotchom n'est pas complètement configuré dans Render."
         });
       }
+
+      // -------------------------------------------------
+      // Récupération du montant
+      // -------------------------------------------------
 
       const amount = Number(req.body.amount);
 
       if (!Number.isFinite(amount) || amount <= 0) {
         return res.status(400).json({
           success: false,
+          paymentReady: false,
           error: "Montant Premium invalide."
         });
       }
 
+      // -------------------------------------------------
+      // Devise
+      // -------------------------------------------------
+
       const currency =
-  String(req.body.currency || "HTG")
-    .trim()
-    .toUpperCase();
+        String(req.body.currency || "HTG")
+          .trim()
+          .toUpperCase();
 
-const paymentMethod =
-  String(req.body.paymentMethod || "moncash")
-    .trim()
-    .toLowerCase();
+      // -------------------------------------------------
+      // Méthode de paiement
+      // -------------------------------------------------
 
-const reference =
-  `LUMIO-PREMIUM-${req.user.id}-${Date.now()}`;
+      const paymentMethod =
+        String(req.body.paymentMethod || "moncash")
+          .trim()
+          .toLowerCase();
 
-const description = "Lumio Premium"; 
+      // -------------------------------------------------
+      // Référence unique
+      // -------------------------------------------------
+
+      const reference =
+        `LUMIO-PREMIUM-${req.user.id}-${Date.now()}`;
+
+      // -------------------------------------------------
+      // Description
+      // -------------------------------------------------
+
+      const description = "Lumio Premium";
+
+      // -------------------------------------------------
+      // Données envoyées à Tchotchom
+      // -------------------------------------------------
+
+      const paymentData = {
+        amount,
+        currency,
+        payee_email: TCHOTCHOM_PAYEE_EMAIL,
+        description,
+        reference,
+        payment_method: paymentMethod
+      };
+
+      console.log(
+        "Création paiement Tchotchom:",
+        {
+          amount,
+          currency,
+          reference,
+          payment_method: paymentMethod
+        }
+      );
+
+      // -------------------------------------------------
+      // Appel API Tchotchom
+      // -------------------------------------------------
+
+      const credentials =
+        Buffer.from(
+          `${TCHOTCHOM_API_KEY}:${TCHOTCHOM_SECRET_KEY}`
+        ).toString("base64");
+
+      const response = await fetch(
+        "https://www.sbfastgroup.com/api/v1/payments",
+        {
+          method: "POST",
+
+          headers: {
+            "Authorization": `Basic ${credentials}`,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+
+          body: JSON.stringify(paymentData)
+        }
+      );
+
+      // -------------------------------------------------
+      // Lecture de la réponse
+      // -------------------------------------------------
+
+      let data;
+
+      try {
+        data = await response.json();
+      } catch {
+        data = {
+          success: false,
+          error: "Réponse invalide de Tchotchom."
+        };
+      }
+
+      console.log(
+        "Réponse Tchotchom:",
+        {
+          status: response.status,
+          data
+        }
+      );
+
+      // -------------------------------------------------
+      // Paiement refusé par Tchotchom
+      // -------------------------------------------------
+
+      if (!response.ok || data.success === false) {
+        return res.status(502).json({
+          success: false,
+          paymentReady: false,
+          error:
+            data?.message ||
+            data?.error ||
+            "Tchotchom a refusé la création du paiement."
+        });
+      }
+
+      // -------------------------------------------------
+      // Paiement créé
+      // -------------------------------------------------
+
+      const payment =
+        data?.data || data;
+
+      return res.status(201).json({
+        success: true,
+        paymentReady: true,
+
+        payment: {
+          id: payment?.id || null,
+          amount: payment?.amount || amount,
+          currency:
+            payment?.currency || currency,
+
+          status:
+            payment?.status || "pending",
+
+          reference:
+            payment?.reference || reference,
+
+          paymentMethod:
+            payment?.payment_method ||
+            paymentMethod
+        }
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Erreur Tchotchom:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        paymentReady: false,
+        error:
+          "Impossible de créer le paiement Premium."
+      });
+    }
+  }
+);
