@@ -1,2929 +1,1152 @@
-<script>
+const express = require("express");
+const cors = require("cors");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const { Pool } = require("pg");
 
-/* =====================================================
-   LUMIO — JAVASCRIPT COMPLET
-   FREE → PAIEMENT → CONFIRMATION → PREMIUM
-===================================================== */
+const app = express();
 
+const PORT = process.env.PORT || 10000;
 
-/* =====================================================
-   CONFIGURATION
-===================================================== */
+const DATABASE_URL = process.env.DATABASE_URL;
+const JWT_SECRET = process.env.JWT_SECRET;
 
-const API_URL =
-"https://lumio-backend-1-i6a3.onrender.com";
-
-const TCHOTCHOM_PAYMENT_URL =
-"https://tchotchom.com/dDL1O43u09V40aYmtcVHrzsekuUletIY8vmKYicZ5KU";
-
-const PREMIUM_PRICE = 250;
-
-
-/* =====================================================
-   VARIABLES
-===================================================== */
-
-let token =
-localStorage.getItem("lumio_token") || "";
-
-let currentUser = null;
-
-let tasksData = [];
-let eventsData = [];
-let notesData = [];
-let budgetData = [];
-let goalsData = [];
-
-let registerMode = true;
-
-let isPremium = false;
-
-
-/* =====================================================
-   UTILITAIRES
-===================================================== */
-
-function escapeHTML(value){
-
-  return String(value ?? "")
-    .replace(/&/g,"&amp;")
-    .replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;")
-    .replace(/"/g,"&quot;")
-    .replace(/'/g,"&#039;");
-
+if (!DATABASE_URL) {
+  console.error("ERROR: DATABASE_URL is missing.");
+  process.exit(1);
 }
 
-
-function showError(message){
-
-  const box =
-    document.getElementById("error");
-
-  if(box){
-
-    box.textContent =
-      message || "";
-
-  }
-
+if (!JWT_SECRET) {
+  console.error("ERROR: JWT_SECRET is missing.");
+  process.exit(1);
 }
 
+/* =========================
+   MIDDLEWARE
+========================= */
 
-function formatMoney(value){
+app.use(
+  cors({
+    origin: true,
+    credentials: true
+  })
+);
 
-  return Number(value || 0)
-    .toLocaleString("fr-FR",{
-      minimumFractionDigits:2,
-      maximumFractionDigits:2
-    }) + " HTG";
+app.use(express.json());
 
+app.use(express.urlencoded({ extended: true }));
+
+/* =========================
+   DATABASE
+========================= */
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
+/* =========================
+   DATABASE INITIALIZATION
+========================= */
+
+async function initializeDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      premium BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT DEFAULT 'pending',
+      plan TEXT DEFAULT 'premium',
+      provider TEXT,
+      provider_customer_id TEXT,
+      provider_subscription_id TEXT,
+      started_at TIMESTAMP,
+      expires_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      priority TEXT DEFAULT 'medium',
+      completed BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS events (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      event_date DATE NOT NULL,
+      event_time TIME,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notes (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS budgets (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      type TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS goals (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      target INTEGER NOT NULL,
+      progress INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  console.log("Database initialized successfully.");
 }
 
-
-/* =====================================================
-   API
-===================================================== */
-
-async function api(path,options={}){
-
-  const headers = {
-
-    "Content-Type":
-      "application/json",
-
-    ...(options.headers || {})
-
-  };
-
-
-  if(token){
-
-    headers.Authorization =
-      "Bearer " + token;
-
-  }
-
-
-  let response;
-
-
-  try{
-
-    response =
-      await fetch(
-        API_URL + path,
-        {
-          ...options,
-          headers
-        }
-      );
-
-  }catch(error){
-
-    throw new Error(
-      "Impossible de contacter le serveur Lumio."
-    );
-
-  }
-
-
-  let data;
-
-
-  try{
-
-    data =
-      await response.json();
-
-  }catch{
-
-    data = {
-
-      success:false,
-
-      error:
-        "Réponse serveur invalide."
-
-    };
-
-  }
-
-
-  if(response.status === 401){
-
-    clearSession();
-
-    showAuth();
-
-    throw new Error(
-      "Votre session a expiré. Connectez-vous à nouveau."
-    );
-
-  }
-
-
-  if(!response.ok){
-
-    throw new Error(
-
-      data?.error ||
-
-      data?.message ||
-
-      "Erreur serveur."
-
-    );
-
-  }
-
-
-  return data;
-
-}
-
-
-/* =====================================================
-   SESSION
-===================================================== */
-
-function clearSession(){
-
-  token = "";
-
-  currentUser = null;
-
-  isPremium = false;
-
-  localStorage.removeItem(
-    "lumio_token"
-  );
-
-}
-
-
-function showAuth(){
-
-  const app =
-    document.getElementById("app");
-
-  const auth =
-    document.getElementById("auth");
-
-
-  if(app){
-
-    app.classList.add(
-      "hidden"
-    );
-
-  }
-
-
-  if(auth){
-
-    auth.classList.remove(
-      "hidden"
-    );
-
-  }
-
-}
-
-
-function showApplication(){
-
-  const auth =
-    document.getElementById("auth");
-
-  const app =
-    document.getElementById("app");
-
-
-  if(auth){
-
-    auth.classList.add(
-      "hidden"
-    );
-
-  }
-
-
-  if(app){
-
-    app.classList.remove(
-      "hidden"
-    );
-
-  }
-
-}
-
-
-/* =====================================================
-   AUTHENTIFICATION
-===================================================== */
-
-const authForm =
-  document.getElementById(
-    "authForm"
-  );
-
-const authTitle =
-  document.getElementById(
-    "authTitle"
-  );
-
-const authSubmit =
-  document.getElementById(
-    "authSubmit"
-  );
-
-const switchMode =
-  document.getElementById(
-    "switchMode"
-  );
-
-const switchText =
-  document.getElementById(
-    "switchText"
-  );
-
-
-if(switchMode){
-
-  switchMode.addEventListener(
-    "click",
-    function(){
-
-      registerMode =
-        !registerMode;
-
-      showError("");
-
-
-      if(registerMode){
-
-        authTitle.textContent =
-          "Bienvenue sur Lumio";
-
-        authSubmit.textContent =
-          "Créer mon compte";
-
-        switchText.textContent =
-          "Vous avez déjà un compte ?";
-
-        switchMode.textContent =
-          "Se connecter";
-
-      }else{
-
-        authTitle.textContent =
-          "Bon retour sur Lumio";
-
-        authSubmit.textContent =
-          "Se connecter";
-
-        switchText.textContent =
-          "Vous n'avez pas encore de compte ?";
-
-        switchMode.textContent =
-          "Créer un compte";
-
-      }
-
+/* =========================
+   JWT
+========================= */
+
+function createToken(user) {
+  return jwt.sign(
+    {
+      id: user.id,
+      email: user.email
+    },
+    JWT_SECRET,
+    {
+      expiresIn: "7d"
     }
   );
-
 }
 
-
-/* =====================================================
-   FORMULAIRE AUTH
-===================================================== */
-
-if(authForm){
-
-  authForm.addEventListener(
-    "submit",
-    async function(event){
-
-      event.preventDefault();
-
-      showError("");
-
-
-      const email =
-        document
-          .getElementById("email")
-          .value
-          .trim()
-          .toLowerCase();
-
-
-      const password =
-        document
-          .getElementById("password")
-          .value;
-
-
-      if(!email || !password){
-
-        showError(
-          "Veuillez remplir tous les champs."
-        );
-
-        return;
-
-      }
-
-
-      if(password.length < 6){
-
-        showError(
-          "Le mot de passe doit contenir au moins 6 caractères."
-        );
-
-        return;
-
-      }
-
-
-      authSubmit.disabled =
-        true;
-
-
-      authSubmit.textContent =
-        registerMode
-          ? "Création..."
-          : "Connexion...";
-
-
-      try{
-
-        const endpoint =
-          registerMode
-            ? "/api/auth/register"
-            : "/api/auth/login";
-
-
-        const data =
-          await api(
-            endpoint,
-            {
-              method:"POST",
-
-              body:
-                JSON.stringify({
-
-                  email,
-
-                  password
-
-                })
-
-            }
-          );
-
-
-        if(!data?.token){
-
-          throw new Error(
-
-            data?.error ||
-
-            "Le serveur n'a pas envoyé de token."
-
-          );
-
-        }
-
-
-        token =
-          data.token;
-
-
-        localStorage.setItem(
-          "lumio_token",
-          token
-        );
-
-
-        currentUser =
-          data.user ||
-
-          data.data?.user ||
-
-          null;
-
-
-        document
-          .getElementById(
-            "password"
-          )
-          .value = "";
-
-
-        await openApp();
-
-
-      }catch(error){
-
-        console.error(
-          "AUTH ERROR:",
-          error
-        );
-
-
-        showError(
-          error.message ||
-          "Impossible de continuer."
-        );
-
-
-      }finally{
-
-        authSubmit.disabled =
-          false;
-
-
-        authSubmit.textContent =
-          registerMode
-            ? "Créer mon compte"
-            : "Se connecter";
-
-      }
-
+function authenticate(req, res, next) {
+  const header = req.headers.authorization || "";
+
+  if (!header.startsWith("Bearer ")) {
+    return res.status(401).json({
+      success: false,
+      error: "Authentification requise."
+    });
+  }
+
+  const token = header.substring(7);
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    req.user = decoded;
+
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      success: false,
+      error: "Session expirée ou token invalide."
+    });
+  }
+}
+
+/* =========================
+   HEALTH
+========================= */
+
+app.get("/", async (req, res) => {
+  res.json({
+    app: "Lumio",
+    backend: "online",
+    version: "3.1.0"
+  });
+});
+
+app.get("/api/health", async (req, res) => {
+  try {
+    await pool.query("SELECT 1");
+
+    res.json({
+      success: true,
+      app: "Lumio",
+      backend: "online",
+      database: "online",
+      version: "3.1.0",
+      features: [
+        "authentication",
+        "postgresql",
+        "tasks",
+        "planning",
+        "notes",
+        "budget",
+        "goals",
+        "focus",
+        "premium",
+        "subscription-status",
+        "pwa-ready"
+      ]
+    });
+  } catch (error) {
+    console.error("Health check error:", error);
+
+    res.status(500).json({
+      success: false,
+      backend: "online",
+      database: "offline"
+    });
+  }
+});
+
+/* =========================
+   REGISTER
+========================= */
+
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
+
+    const password = String(req.body.password || "");
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: "Email et mot de passe requis."
+      });
     }
-  );
 
-}
-
-
-/* =====================================================
-   OUVRIR APPLICATION
-===================================================== */
-
-async function openApp(){
-
-  if(!token){
-
-    showAuth();
-
-    return;
-
-  }
-
-
-  showApplication();
-
-
-  try{
-
-    const me =
-      await api(
-        "/api/auth/me"
-      );
-
-
-    currentUser =
-      me?.user ||
-
-      me?.data?.user ||
-
-      me?.data ||
-
-      me ||
-
-      currentUser;
-
-
-  }catch(error){
-
-    console.error(error);
-
-
-    clearSession();
-
-    showAuth();
-
-
-    showError(
-      "Session invalide. Veuillez vous reconnecter."
-    );
-
-
-    return;
-
-  }
-
-
-  const userEmail =
-    document.getElementById(
-      "userEmail"
-    );
-
-
-  if(userEmail){
-
-    userEmail.textContent =
-      currentUser?.email || "";
-
-  }
-
-
-  await loadAll();
-
-}
-
-
-/* =====================================================
-   DÉCONNEXION
-===================================================== */
-
-function logout(showMessage=true){
-
-  clearSession();
-
-  showAuth();
-
-
-  const email =
-    document.getElementById(
-      "email"
-    );
-
-
-  const password =
-    document.getElementById(
-      "password"
-    );
-
-
-  if(email){
-
-    email.value = "";
-
-  }
-
-
-  if(password){
-
-    password.value = "";
-
-  }
-
-
-  showError(
-    showMessage
-      ? "Vous êtes déconnecté."
-      : ""
-  );
-
-}
-
-
-const logoutButton =
-  document.getElementById(
-    "logoutButton"
-  );
-
-
-if(logoutButton){
-
-  logoutButton.addEventListener(
-    "click",
-    function(){
-
-      logout(true);
-
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Le mot de passe doit contenir au moins 6 caractères."
+      });
     }
-  );
 
-}
+    const existing = await pool.query(
+      "SELECT id FROM users WHERE email = $1",
+      [email]
+    );
 
+    if (existing.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: "Un compte existe déjà avec cet email."
+      });
+    }
 
-/* =====================================================
-   NAVIGATION
-===================================================== */
+    const passwordHash = await bcrypt.hash(password, 12);
 
-function showPage(pageId,button){
+    const result = await pool.query(
+      `
+      INSERT INTO users
+      (email, password_hash, premium)
+      VALUES ($1, $2, FALSE)
+      RETURNING id, email, premium, created_at
+      `,
+      [email, passwordHash]
+    );
 
-  document
-    .querySelectorAll(".page")
-    .forEach(function(page){
+    const user = result.rows[0];
 
-      page.classList.remove(
-        "active"
-      );
+    const token = createToken(user);
 
+    res.status(201).json({
+      success: true,
+      message: "Compte créé avec succès.",
+      token,
+      user
+    });
+  } catch (error) {
+    console.error("Register error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Erreur lors de la création du compte."
+    });
+  }
+});
+
+/* =========================
+   LOGIN
+========================= */
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
+
+    const password = String(req.body.password || "");
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: "Email et mot de passe requis."
+      });
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+        id,
+        email,
+        password_hash,
+        premium,
+        created_at
+      FROM users
+      WHERE email = $1
+      `,
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({
+        success: false,
+        error: "Email ou mot de passe incorrect."
+      });
+    }
+
+    const user = result.rows[0];
+
+    const validPassword = await bcrypt.compare(
+      password,
+      user.password_hash
+    );
+
+    if (!validPassword) {
+      return res.status(401).json({
+        success: false,
+        error: "Email ou mot de passe incorrect."
+      });
+    }
+
+    const token = createToken(user);
+
+    delete user.password_hash;
+
+    res.json({
+      success: true,
+      message: "Connexion réussie.",
+      token,
+      user
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Erreur lors de la connexion."
+    });
+  }
+});
+
+/* =========================
+   CURRENT USER
+========================= */
+
+app.get("/api/auth/me", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT id, email, premium, created_at
+      FROM users
+      WHERE id = $1
+      `,
+      [req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Utilisateur introuvable."
+      });
+    }
+
+    res.json({
+      success: true,
+      user: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Me error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de récupérer le compte."
+    });
+  }
+});
+
+/* =========================
+   TASKS
+========================= */
+
+app.get("/api/tasks", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT id, title, priority, completed, created_at
+      FROM tasks
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [req.user.id]
+    );
+
+    res.json({
+      success: true,
+      tasks: result.rows
+    });
+  } catch (error) {
+    console.error("Get tasks error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de récupérer les tâches."
+    });
+  }
+});
+
+app.post("/api/tasks", authenticate, async (req, res) => {
+  try {
+    const title = String(req.body.title || "").trim();
+
+    const priority =
+      ["low", "medium", "high"].includes(req.body.priority)
+        ? req.body.priority
+        : "medium";
+
+    if (!title) {
+      return res.status(400).json({
+        success: false,
+        error: "Le titre de la tâche est requis."
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO tasks
+      (user_id, title, priority)
+      VALUES ($1, $2, $3)
+      RETURNING id, title, priority, completed, created_at
+      `,
+      [req.user.id, title, priority]
+    );
+
+    res.status(201).json({
+      success: true,
+      task: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Create task error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de créer la tâche."
+    });
+  }
+});
+
+app.patch("/api/tasks/:id", authenticate, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    const completed =
+      Boolean(req.body.completed);
+
+    const result = await pool.query(
+      `
+      UPDATE tasks
+      SET completed = $1
+      WHERE id = $2
+      AND user_id = $3
+      RETURNING id, title, priority, completed, created_at
+      `,
+      [completed, id, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Tâche introuvable."
+      });
+    }
+
+    res.json({
+      success: true,
+      task: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Update task error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de modifier la tâche."
+    });
+  }
+});
+
+app.delete("/api/tasks/:id", authenticate, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    const result = await pool.query(
+      `
+      DELETE FROM tasks
+      WHERE id = $1
+      AND user_id = $2
+      RETURNING id
+      `,
+      [id, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Tâche introuvable."
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Tâche supprimée."
+    });
+  } catch (error) {
+    console.error("Delete task error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de supprimer la tâche."
+    });
+  }
+});
+
+/* =========================
+   PLANNING / EVENTS
+========================= */
+
+app.get("/api/events", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT id, title, event_date, event_time, created_at
+      FROM events
+      WHERE user_id = $1
+      ORDER BY event_date ASC, event_time ASC
+      `,
+      [req.user.id]
+    );
+
+    res.json({
+      success: true,
+      events: result.rows
+    });
+  } catch (error) {
+    console.error("Get events error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de récupérer le planning."
+    });
+  }
+});
+
+app.post("/api/events", authenticate, async (req, res) => {
+  try {
+    const title = String(req.body.title || "").trim();
+    const eventDate = String(req.body.date || "").trim();
+    const eventTime = req.body.time
+      ? String(req.body.time)
+      : null;
+
+    if (!title || !eventDate) {
+      return res.status(400).json({
+        success: false,
+        error: "Titre et date requis."
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO events
+      (user_id, title, event_date, event_time)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, title, event_date, event_time, created_at
+      `,
+      [
+        req.user.id,
+        title,
+        eventDate,
+        eventTime
+      ]
+    );
+
+    res.status(201).json({
+      success: true,
+      event: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Create event error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de créer l'événement."
+    });
+  }
+});
+
+app.delete("/api/events/:id", authenticate, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    const result = await pool.query(
+      `
+      DELETE FROM events
+      WHERE id = $1
+      AND user_id = $2
+      RETURNING id
+      `,
+      [id, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Événement introuvable."
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Événement supprimé."
+    });
+  } catch (error) {
+    console.error("Delete event error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de supprimer l'événement."
+    });
+  }
+});
+
+/* =========================
+   NOTES
+========================= */
+
+app.get("/api/notes", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT id, title, content, created_at
+      FROM notes
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [req.user.id]
+    );
+
+    res.json({
+      success: true,
+      notes: result.rows
+    });
+  } catch (error) {
+    console.error("Get notes error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de récupérer les notes."
+    });
+  }
+});
+
+app.post("/api/notes", authenticate, async (req, res) => {
+  try {
+    const title = String(req.body.title || "").trim();
+    const content = String(req.body.content || "").trim();
+
+    if (!title || !content) {
+      return res.status(400).json({
+        success: false,
+        error: "Titre et contenu requis."
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO notes
+      (user_id, title, content)
+      VALUES ($1, $2, $3)
+      RETURNING id, title, content, created_at
+      `,
+      [
+        req.user.id,
+        title,
+        content
+      ]
+    );
+
+    res.status(201).json({
+      success: true,
+      note: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Create note error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de créer la note."
+    });
+  }
+});
+
+app.delete("/api/notes/:id", authenticate, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    const result = await pool.query(
+      `
+      DELETE FROM notes
+      WHERE id = $1
+      AND user_id = $2
+      RETURNING id
+      `,
+      [id, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Note introuvable."
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Note supprimée."
+    });
+  } catch (error) {
+    console.error("Delete note error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de supprimer la note."
+    });
+  }
+});
+
+/* =========================
+   BUDGET
+========================= */
+
+app.get("/api/budget", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT id, description, amount, type, created_at
+      FROM budgets
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [req.user.id]
+    );
+
+    res.json({
+      success: true,
+      budget: result.rows
+    });
+  } catch (error) {
+    console.error("Get budget error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de récupérer le budget."
+    });
+  }
+});
+
+app.post("/api/budget", authenticate, async (req, res) => {
+  try {
+    const description =
+      String(req.body.description || "").trim();
+
+    const amount =
+      Number(req.body.amount);
+
+    const type =
+      req.body.type === "income"
+        ? "income"
+        : "expense";
+
+    if (!description) {
+      return res.status(400).json({
+        success: false,
+        error: "Description requise."
+      });
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Montant invalide."
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO budgets
+      (user_id, description, amount, type)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, description, amount, type, created_at
+      `,
+      [
+        req.user.id,
+        description,
+        amount,
+        type
+      ]
+    );
+
+    res.status(201).json({
+      success: true,
+      budget: result.rows[0]
+    });
+  } catch (error) {
+    console.error("Create budget error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible d'ajouter l'opération."
+    });
+  }
+});
+
+app.delete("/api/budget/:id", authenticate, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    const result = await pool.query(
+      `
+      DELETE FROM budgets
+      WHERE id = $1
+      AND user_id = $2
+      RETURNING id
+      `,
+      [id, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Opération introuvable."
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Opération supprimée."
+    });
+  } catch (error) {
+    console.error("Delete budget error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de supprimer l'opération."
+    });
+  }
+});
+
+/* =========================
+   GOALS
+========================= */
+
+app.get("/api/goals", authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT id, title, target, progress, created_at
+      FROM goals
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [req.user.id]
+    );
+
+    res.json({
+      success: true,
+      goals: result.rows
+    });
+  } catch (error) {
+    console.error("Get goals error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de récupérer les objectifs."
+    });
+  }
+});
+
+app.post("/api/goals", authenticate, async (req, res) => {
+  try {
+    const title = String(req.body.title || "").trim();
+
+    const target = Number(req.body.target);
+
+    if (!title) {
+      return res.status(400).json({
+        success: false,
+        error: "Titre de l'objectif requis."
+      });
+    }
+
+    if (!Number.isInteger(target) || target <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: "La cible doit être un entier positif."
+      });
+    }
+
+    const result = await pool.query(
+      `
+      INSERT INTO goals
+      (user_id, title, target, progress)
+      VALUES ($1, $2, $3, 0)
+      RETURNING id, title, target, progress, created_at
+      `,
+      [
+        req.user.id,
+        title,
+        target
+      ]
+    );
+
+    res.status(201).json({
+      success: true,
+      goal: result.rows[0]
+    });/* =========================
+   UPDATE GOAL
+========================= */
+
+app.patch("/api/goals/:id", authenticate, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({
+        success: false,
+        error: "Identifiant d'objectif invalide."
+      });
+    }
+
+    const progress = Number(req.body.progress);
+
+    if (!Number.isInteger(progress) || progress < 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Progression invalide."
+      });
+    }
+
+    const result = await pool.query(
+      `
+      UPDATE goals
+      SET progress = LEAST(progress, target)
+      WHERE id = $1
+      AND user_id = $2
+      RETURNING id, title, target, progress, created_at
+      `,
+      [
+        id,
+        req.user.id
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Objectif introuvable."
+      });
+    }
+
+    res.json({
+      success: true,
+      goal: result.rows[0]
     });
 
+  } catch (error) {
 
-  const page =
-    document.getElementById(
-      pageId
-    );
+    console.error("Update goal error:", error);
 
-
-  if(page){
-
-    page.classList.add(
-      "active"
-    );
-
-  }
-
-
-  document
-    .querySelectorAll(".nav-btn")
-    .forEach(function(btn){
-
-      btn.classList.remove(
-        "active"
-      );
-
+    res.status(500).json({
+      success: false,
+      error: "Impossible de modifier l'objectif."
     });
 
+  }
+});
 
-  if(button){
 
-    button.classList.add(
-      "active"
+/* =========================
+   DELETE GOAL
+========================= */
+
+app.delete("/api/goals/:id", authenticate, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({
+        success: false,
+        error: "Identifiant d'objectif invalide."
+      });
+    }
+
+    const result = await pool.query(
+      `
+      DELETE FROM goals
+      WHERE id = $1
+      AND user_id = $2
+      RETURNING id
+      `,
+      [
+        id,
+        req.user.id
+      ]
     );
 
-  }else{
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Objectif introuvable."
+      });
+    }
 
-    document
-      .querySelectorAll(".nav-btn")
-      .forEach(function(btn){
+    res.json({
+      success: true,
+      message: "Objectif supprimé."
+    });
 
-        const onclick =
-          btn.getAttribute(
-            "onclick"
-          ) || "";
+  } catch (error) {
+
+    console.error("Delete goal error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de supprimer l'objectif."
+    });
+
+  }
+});
 
 
-        if(
-          onclick.includes(
-            "'" + pageId + "'"
-          )
-        ){
+/* =========================
+   PREMIUM STATUS
+========================= */
 
-          btn.classList.add(
-            "active"
-          );
+app.get(
+  "/api/subscription/status",
+  authenticate,
+  async (req, res) => {
 
-        }
+    try {
+
+      const userResult = await pool.query(
+        `
+        SELECT
+          id,
+          email,
+          premium
+        FROM users
+        WHERE id = $1
+        `,
+        [req.user.id]
+      );
+
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Utilisateur introuvable."
+        });
+      }
+
+      const user = userResult.rows[0];
+
+      const subscriptionResult = await pool.query(
+        `
+        SELECT
+          id,
+          status,
+          plan,
+          provider,
+          started_at,
+          expires_at,
+          created_at
+        FROM subscriptions
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [req.user.id]
+      );
+
+      const subscription =
+        subscriptionResult.rows.length > 0
+          ? subscriptionResult.rows[0]
+          : null;
+
+      res.json({
+        success: true,
+
+        premium: Boolean(user.premium),
+
+        user: {
+          id: user.id,
+          email: user.email
+        },
+
+        subscription
 
       });
 
-  }
+    } catch (error) {
 
-}
-
-
-/* =====================================================
-   CHARGEMENT GLOBAL
-===================================================== */
-
-async function loadAll(){
-
-  await Promise.allSettled([
-
-    loadTasks(),
-
-    loadEvents(),
-
-    loadNotes(),
-
-    loadBudget(),
-
-    loadGoals(),
-
-    loadSubscription()
-
-  ]);
-
-
-  updateDashboard();
-
-}
-
-
-/* =====================================================
-   TÂCHES
-===================================================== */
-
-async function loadTasks(){
-
-  try{
-
-    const data =
-      await api(
-        "/api/tasks"
+      console.error(
+        "Subscription status error:",
+        error
       );
 
-
-    tasksData =
-      data?.tasks ||
-      data?.data ||
-      [];
-
-
-    if(!Array.isArray(tasksData)){
-
-      tasksData = [];
-
-    }
-
-
-    renderTasks();
-
-
-  }catch(error){
-
-    console.error(
-      "Erreur tâches:",
-      error
-    );
-
-
-    tasksData = [];
-
-
-    renderTasks(
-      "Impossible de charger les tâches."
-    );
-
-  }
-
-}
-
-
-function renderTasks(
-  errorMessage=""
-){
-
-  const list =
-    document.getElementById(
-      "tasksList"
-    );
-
-
-  if(!list)return;
-
-
-  if(errorMessage){
-
-    list.innerHTML =
-      `<div class="empty">
-        ${escapeHTML(errorMessage)}
-      </div>`;
-
-    return;
-
-  }
-
-
-  if(!tasksData.length){
-
-    list.innerHTML =
-      `<div class="empty">
-        Aucune tâche pour le moment.
-      </div>`;
-
-    return;
-
-  }
-
-
-  list.innerHTML =
-    tasksData.map(
-      function(task){
-
-        const priority =
-          task.priority || "medium";
-
-
-        const priorityLabel =
-          priority === "high"
-            ? "Haute"
-            : priority === "low"
-              ? "Faible"
-              : "Moyenne";
-
-
-        return `
-
-          <div class="item">
-
-            <div class="item-main">
-
-              <div
-                class="item-title"
-                style="${
-                  task.completed
-                    ? "text-decoration:line-through;opacity:.6;"
-                    : ""
-                }"
-              >
-
-                ${escapeHTML(
-                  task.title
-                )}
-
-              </div>
-
-              <div class="item-small">
-
-                Priorité :
-                ${priorityLabel}
-
-              </div>
-
-            </div>
-
-
-            <div class="item-actions">
-
-              <button
-                class="${
-                  task.completed
-                    ? "orange"
-                    : "success"
-                }"
-                onclick="
-                  toggleTask(
-                    ${Number(task.id)},
-                    ${!task.completed}
-                  )
-                "
-              >
-
-                ${
-                  task.completed
-                    ? "Annuler"
-                    : "Terminer"
-                }
-
-              </button>
-
-
-              <button
-                class="danger"
-                onclick="
-                  deleteTask(
-                    ${Number(task.id)}
-                  )
-                "
-              >
-
-                Supprimer
-
-              </button>
-
-            </div>
-
-          </div>
-
-        `;
-
-      }
-    ).join("");
-
-}
-
-
-async function addTask(){
-
-  const input =
-    document.getElementById(
-      "taskTitle"
-    );
-
-
-  const priority =
-    document.getElementById(
-      "taskPriority"
-    ).value;
-
-
-  const title =
-    input.value.trim();
-
-
-  if(!title){
-
-    alert(
-      "Écrivez le nom de la tâche."
-    );
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      "/api/tasks",
-      {
-        method:"POST",
-
-        body:
-          JSON.stringify({
-
-            title,
-
-            priority
-
-          })
-
-      }
-    );
-
-
-    input.value = "";
-
-
-    await loadTasks();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-async function toggleTask(
-  id,
-  completed
-){
-
-  try{
-
-    await api(
-      `/api/tasks/${id}`,
-      {
-        method:"PATCH",
-
-        body:
-          JSON.stringify({
-            completed
-          })
-
-      }
-    );
-
-
-    await loadTasks();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-async function deleteTask(id){
-
-  if(
-    !confirm(
-      "Supprimer cette tâche ?"
-    )
-  ){
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      `/api/tasks/${id}`,
-      {
-        method:"DELETE"
-      }
-    );
-
-
-    await loadTasks();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-/* =====================================================
-   PLANNING
-===================================================== */
-
-async function loadEvents(){
-
-  try{
-
-    const data =
-      await api(
-        "/api/events"
-      );
-
-
-    eventsData =
-      data?.events ||
-      data?.data ||
-      [];
-
-
-    if(
-      !Array.isArray(eventsData)
-    ){
-
-      eventsData = [];
-
-    }
-
-
-    renderEvents();
-
-
-  }catch(error){
-
-    console.error(
-      "Erreur planning:",
-      error
-    );
-
-
-    eventsData = [];
-
-
-    renderEvents(
-      "Impossible de charger le planning."
-    );
-
-  }
-
-}
-
-
-function renderEvents(
-  errorMessage=""
-){
-
-  const list =
-    document.getElementById(
-      "eventsList"
-    );
-
-
-  if(!list)return;
-
-
-  if(errorMessage){
-
-    list.innerHTML =
-      `<div class="empty">
-        ${escapeHTML(errorMessage)}
-      </div>`;
-
-    return;
-
-  }
-
-
-  if(!eventsData.length){
-
-    list.innerHTML =
-      `<div class="empty">
-        Aucun événement pour le moment.
-      </div>`;
-
-    return;
-
-  }
-
-
-  list.innerHTML =
-    eventsData.map(
-      function(event){
-
-        return `
-
-          <div class="item">
-
-            <div class="item-main">
-
-              <div class="item-title">
-
-                ${escapeHTML(
-                  event.title
-                )}
-
-              </div>
-
-
-              <div class="item-small">
-
-                ${escapeHTML(
-                  event.event_date || ""
-                )}
-
-                ${
-                  event.event_time
-                    ? " — " +
-                      escapeHTML(
-                        event.event_time
-                      )
-                    : ""
-                }
-
-              </div>
-
-            </div>
-
-
-            <div class="item-actions">
-
-              <button
-                class="danger"
-                onclick="
-                  deleteEvent(
-                    ${Number(event.id)}
-                  )
-                "
-              >
-
-                Supprimer
-
-              </button>
-
-            </div>
-
-          </div>
-
-        `;
-
-      }
-    ).join("");
-
-}
-
-
-async function addEvent(){
-
-  const title =
-    document
-      .getElementById(
-        "eventTitle"
-      )
-      .value
-      .trim();
-
-
-  const date =
-    document
-      .getElementById(
-        "eventDate"
-      )
-      .value;
-
-
-  if(!title || !date){
-
-    alert(
-      "Veuillez remplir le titre et la date."
-    );
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      "/api/events",
-      {
-        method:"POST",
-
-        body:
-          JSON.stringify({
-
-            title,
-
-            event_date:date
-
-          })
-
-      }
-    );
-
-
-    document
-      .getElementById(
-        "eventTitle"
-      )
-      .value = "";
-
-
-    document
-      .getElementById(
-        "eventDate"
-      )
-      .value = "";
-
-
-    await loadEvents();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-async function deleteEvent(id){
-
-  if(
-    !confirm(
-      "Supprimer cet événement ?"
-    )
-  ){
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      `/api/events/${id}`,
-      {
-        method:"DELETE"
-      }
-    );
-
-
-    await loadEvents();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-/* =====================================================
-   NOTES
-===================================================== */
-
-async function loadNotes(){
-
-  try{
-
-    const data =
-      await api(
-        "/api/notes"
-      );
-
-
-    notesData =
-      data?.notes ||
-      data?.data ||
-      [];
-
-
-    if(
-      !Array.isArray(notesData)
-    ){
-
-      notesData = [];
-
-    }
-
-
-    renderNotes();
-
-
-  }catch(error){
-
-    console.error(
-      "Erreur notes:",
-      error
-    );
-
-
-    notesData = [];
-
-
-    renderNotes(
-      "Impossible de charger les notes."
-    );
-
-  }
-
-}
-
-
-function renderNotes(
-  errorMessage=""
-){
-
-  const list =
-    document.getElementById(
-      "notesList"
-    );
-
-
-  if(!list)return;
-
-
-  if(errorMessage){
-
-    list.innerHTML =
-      `<div class="empty">
-        ${escapeHTML(errorMessage)}
-      </div>`;
-
-    return;
-
-  }
-
-
-  if(!notesData.length){
-
-    list.innerHTML =
-      `<div class="empty">
-        Aucune note pour le moment.
-      </div>`;
-
-    return;
-
-  }
-
-
-  list.innerHTML =
-    notesData.map(
-      function(note){
-
-        return `
-
-          <div class="item">
-
-            <div class="item-main">
-
-              <div class="item-title">
-
-                ${escapeHTML(
-                  note.title
-                )}
-
-              </div>
-
-
-              <div class="item-small">
-
-                ${escapeHTML(
-                  note.content
-                )}
-
-              </div>
-
-            </div>
-
-
-            <div class="item-actions">
-
-              <button
-                class="danger"
-                onclick="
-                  deleteNote(
-                    ${Number(note.id)}
-                  )
-                "
-              >
-
-                Supprimer
-
-              </button>
-
-            </div>
-
-          </div>
-
-        `;
-
-      }
-    ).join("");
-
-}
-
-
-async function addNote(){
-
-  const title =
-    document
-      .getElementById(
-        "noteTitle"
-      )
-      .value
-      .trim();
-
-
-  const content =
-    document
-      .getElementById(
-        "noteContent"
-      )
-      .value
-      .trim();
-
-
-  if(!title || !content){
-
-    alert(
-      "Veuillez remplir le titre et le contenu."
-    );
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      "/api/notes",
-      {
-        method:"POST",
-
-        body:
-          JSON.stringify({
-
-            title,
-
-            content
-
-          })
-
-      }
-    );
-
-
-    document
-      .getElementById(
-        "noteTitle"
-      )
-      .value = "";
-
-
-    document
-      .getElementById(
-        "noteContent"
-      )
-      .value = "";
-
-
-    await loadNotes();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-async function deleteNote(id){
-
-  if(
-    !confirm(
-      "Supprimer cette note ?"
-    )
-  ){
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      `/api/notes/${id}`,
-      {
-        method:"DELETE"
-      }
-    );
-
-
-    await loadNotes();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-    error.message
-  );
-
-  }
-
-}
-
-
-/* =====================================================
-   BUDGET
-===================================================== */
-
-async function loadBudget(){
-
-  try{
-
-    const data =
-      await api(
-        "/api/budget"
-      );
-
-
-    budgetData =
-      data?.budget ||
-      data?.data ||
-      [];
-
-
-    if(
-      !Array.isArray(budgetData)
-    ){
-
-      budgetData = [];
-
-    }
-
-
-    renderBudget();
-
-
-  }catch(error){
-
-    console.error(
-      "Erreur budget:",
-      error
-    );
-
-
-    budgetData = [];
-
-
-    renderBudget(
-      "Impossible de charger le budget."
-    );
-
-  }
-
-}
-
-
-function renderBudget(
-  errorMessage=""
-){
-
-  const list =
-    document.getElementById(
-      "budgetList"
-    );
-
-
-  if(!list)return;
-
-
-  if(errorMessage){
-
-    list.innerHTML =
-      `<div class="empty">
-        ${escapeHTML(errorMessage)}
-      </div>`;
-
-    return;
-
-  }
-
-
-  let income = 0;
-  let expense = 0;
-
-
-  budgetData.forEach(
-    function(item){
-
-      const amount =
-        Number(
-          item.amount || 0
-        );
-
-
-      if(
-        item.type === "income"
-      ){
-
-        income += amount;
-
-      }else{
-
-        expense += amount;
-
-      }
-
-    }
-  );
-
-
-  const balance =
-    income - expense;
-
-
-  const balanceElement =
-    document.getElementById(
-      "budgetBalance"
-    );
-
-
-  if(balanceElement){
-
-    balanceElement.textContent =
-      formatMoney(balance);
-
-
-    balanceElement.className =
-      "balance " +
-      (
-        balance >= 0
-          ? "income"
-          : "expense"
-      );
-
-  }
-
-
-  const summary =
-    document.getElementById(
-      "budgetSummary"
-    );
-
-
-  if(summary){
-
-    summary.textContent =
-      `Revenus : ${formatMoney(income)} — Dépenses : ${formatMoney(expense)}`;
-
-  }
-
-
-  if(!budgetData.length){
-
-    list.innerHTML =
-      `<div class="empty">
-        Aucune opération pour le moment.
-      </div>`;
-
-    return;
-
-  }
-
-
-  list.innerHTML =
-    budgetData.map(
-      function(item){
-
-        const amount =
-          Number(
-            item.amount || 0
-          );
-
-
-        const isIncome =
-          item.type === "income";
-
-
-        return `
-
-          <div class="item">
-
-            <div class="item-main">
-
-              <div class="item-title">
-
-                ${escapeHTML(
-                  item.description
-                )}
-
-              </div>
-
-              <div class="item-small">
-
-                ${
-                  isIncome
-                    ? "Revenu"
-                    : "Dépense"
-                }
-
-              </div>
-
-            </div>
-
-
-            <div class="item-actions">
-
-              <strong
-                class="${
-                  isIncome
-                    ? "income"
-                    : "expense"
-                }"
-              >
-
-                ${
-                  isIncome
-                    ? "+"
-                    : "-"
-                }${formatMoney(amount)}
-
-              </strong>
-
-
-              <button
-                class="danger"
-                onclick="
-                  deleteBudget(
-                    ${Number(item.id)}
-                  )
-                "
-              >
-
-                Supprimer
-
-              </button>
-
-            </div>
-
-          </div>
-
-        `;
-
-      }
-    ).join("");
-
-}
-
-
-async function addBudget(){
-
-  const description =
-    document
-      .getElementById(
-        "budgetDescription"
-      )
-      .value
-      .trim();
-
-
-  const amount =
-    Number(
-      document
-        .getElementById(
-          "budgetAmount"
-        )
-        .value
-    );
-
-
-  const type =
-    document
-      .getElementById(
-        "budgetType"
-      )
-      .value;
-
-
-  if(!description){
-
-    alert(
-      "Veuillez entrer une description."
-    );
-
-    return;
-
-  }
-
-
-  if(
-    !amount ||
-    amount <= 0
-  ){
-
-    alert(
-      "Veuillez entrer un montant valide."
-    );
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      "/api/budget",
-      {
-        method:"POST",
-
-        body:
-          JSON.stringify({
-
-            description,
-
-            amount,
-
-            type
-
-          })
-
-      }
-    );
-
-
-    document
-      .getElementById(
-        "budgetDescription"
-      )
-      .value = "";
-
-
-    document
-      .getElementById(
-        "budgetAmount"
-      )
-      .value = "";
-
-
-    await loadBudget();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-async function deleteBudget(id){
-
-  if(
-    !confirm(
-      "Supprimer cette opération ?"
-    )
-  ){
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      `/api/budget/${id}`,
-      {
-        method:"DELETE"
-      }
-    );
-
-
-    await loadBudget();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-/* =====================================================
-   OBJECTIFS
-===================================================== */
-
-async function loadGoals(){
-
-  try{
-
-    const data =
-      await api(
-        "/api/goals"
-      );
-
-
-    goalsData =
-      data?.goals ||
-      data?.data ||
-      [];
-
-
-    if(
-      !Array.isArray(goalsData)
-    ){
-
-      goalsData = [];
-
-    }
-
-
-    renderGoals();
-
-
-  }catch(error){
-
-    console.error(
-      "Erreur objectifs:",
-      error
-    );
-
-
-    goalsData = [];
-
-
-    renderGoals(
-      "Impossible de charger les objectifs."
-    );
-
-  }
-
-}
-
-
-function renderGoals(
-  errorMessage=""
-){
-
-  const list =
-    document.getElementById(
-      "goalsList"
-    );
-
-
-  if(!list)return;
-
-
-  if(errorMessage){
-
-    list.innerHTML =
-      `<div class="empty">
-        ${escapeHTML(errorMessage)}
-      </div>`;
-
-    return;
-
-  }
-
-
-  if(!goalsData.length){
-
-    list.innerHTML =
-      `<div class="empty">
-        Aucun objectif pour le moment.
-      </div>`;
-
-    return;
-
-  }
-
-
-  list.innerHTML =
-    goalsData.map(
-      function(goal){
-
-        const target =
-          Number(
-            goal.target || 0
-          );
-
-
-        const progress =
-          Number(
-            goal.progress || 0
-          );
-
-
-        const percent =
-          target > 0
-            ? Math.min(
-                100,
-                Math.round(
-                  progress /
-                  target *
-                  100
-                )
-              )
-            : 0;
-
-
-        return `
-
-          <div class="item">
-
-            <div class="item-main">
-
-              <div class="item-title">
-
-                ${escapeHTML(
-                  goal.title
-                )}
-
-              </div>
-
-
-              <div class="item-small">
-
-                Progression :
-                ${progress} / ${target}
-
-              </div>
-
-
-              <div class="progress">
-
-                <div
-                  class="progress-bar"
-                  style="width:${percent}%"
-                ></div>
-
-              </div>
-
-            </div>
-
-
-            <div class="item-actions">
-
-              <button
-                class="success"
-                onclick="
-                  increaseGoal(
-                    ${Number(goal.id)},
-                    ${Math.min(
-                      progress + 1,
-                      target
-                    )}
-                  )
-                "
-                ${
-                  progress >= target
-                    ? "disabled"
-                    : ""
-                }
-              >
-
-                +1
-
-              </button>
-
-
-              <button
-                class="danger"
-                onclick="
-                  deleteGoal(
-                    ${Number(goal.id)}
-                  )
-                "
-              >
-
-                Supprimer
-
-              </button>
-
-            </div>
-
-          </div>
-
-        `;
-
-      }
-    ).join("");
-
-}
-
-
-async function addGoal(){
-
-  const title =
-    document
-      .getElementById(
-        "goalTitle"
-      )
-      .value
-      .trim();
-
-
-  const target =
-    Number(
-      document
-        .getElementById(
-          "goalTarget"
-        )
-        .value
-    );
-
-
-  if(!title){
-
-    alert(
-      "Veuillez entrer le nom de l'objectif."
-    );
-
-    return;
-
-  }
-
-
-  if(
-    !target ||
-    target <= 0
-  ){
-
-    alert(
-      "Veuillez entrer une cible valide."
-    );
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      "/api/goals",
-      {
-        method:"POST",
-
-        body:
-          JSON.stringify({
-
-            title,
-
-            target
-
-          })
-
-      }
-    );
-
-
-    document
-      .getElementById(
-        "goalTitle"
-      )
-      .value = "";
-
-
-    document
-      .getElementById(
-        "goalTarget"
-      )
-      .value = "";
-
-
-    await loadGoals();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-async function increaseGoal(
-  id,
-  progress
-){
-
-  try{
-
-    await api(
-      `/api/goals/${id}`,
-      {
-        method:"PATCH",
-
-        body:
-          JSON.stringify({
-
-            progress
-
-          })
-
-      }
-    );
-
-
-    await loadGoals();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-async function deleteGoal(id){
-
-  if(
-    !confirm(
-      "Supprimer cet objectif ?"
-    )
-  ){
-
-    return;
-
-  }
-
-
-  try{
-
-    await api(
-      `/api/goals/${id}`,
-      {
-        method:"DELETE"
-      }
-    );
-
-
-    await loadGoals();
-
-    updateDashboard();
-
-
-  }catch(error){
-
-    alert(
-      error.message
-    );
-
-  }
-
-}
-
-
-/* =====================================================
-   DASHBOARD
-===================================================== */
-
-function updateDashboard(){
-
-  const statTasks =
-    document.getElementById(
-      "statTasks"
-    );
-
-
-  const statEvents =
-    document.getElementById(
-      "statEvents"
-    );
-
-
-  const statNotes =
-    document.getElementById(
-      "statNotes"
-    );
-
-
-  const statGoals =
-    document.getElementById(
-      "statGoals"
-    );
-
-
-  if(statTasks){
-
-    statTasks.textContent =
-      tasksData.length;
-
-  }
-
-
-  if(statEvents){
-
-    statEvents.textContent =
-      eventsData.length;
-
-  }
-
-
-  if(statNotes){
-
-    statNotes.textContent =
-      notesData.length;
-
-  }
-
-
-  if(statGoals){
-
-    statGoals.textContent =
-      goalsData.length;
-
-  }
-
-}
-
-
-/* =====================================================
-   FOCUS TIMER
-===================================================== */
-
-let timerSeconds =
-  25 * 60;
-
-let timerInterval =
-  null;
-
-
-function updateTimer(){
-
-  const timer =
-    document.getElementById(
-      "timer"
-    );
-
-
-  if(!timer)return;
-
-
-  const minutes =
-    Math.floor(
-      timerSeconds / 60
-    );
-
-
-  const seconds =
-    timerSeconds % 60;
-
-
-  timer.textContent =
-    String(minutes)
-      .padStart(2,"0")
-    +
-    ":"
-    +
-    String(seconds)
-      .padStart(2,"0");
-
-}
-
-
-function startTimer(){
-
-  if(timerInterval){
-
-    return;
-
-  }
-
-
-  timerInterval =
-    setInterval(
-      function(){
-
-        if(
-          timerSeconds <= 0
-        ){
-
-          clearInterval(
-            timerInterval
-          );
-
-          timerInterval =
-            null;
-
-
-          alert(
-            "Votre session Focus est terminée."
-          );
-
-
-          return;
-
-        }
-
-
-        timerSeconds--;
-
-        updateTimer();
-
-      },
-      1000
-    );
-
-}
-
-
-function pauseTimer(){
-
-  if(timerInterval){
-
-    clearInterval(
-      timerInterval
-    );
-
-    timerInterval =
-      null;
-
-  }
-
-}
-
-
-function resetTimer(){
-
-  pauseTimer();
-
-  timerSeconds =
-    25 * 60;
-
-  updateTimer();
-
-}
-
-
-/* =====================================================
-   PREMIUM
-===================================================== */
-
-async function loadSubscription(){
-
-  const status =
-    document.getElementById(
-      "premiumStatus"
-    );
-
-
-  const badge =
-    document.getElementById(
-      "premiumBadge"
-    );
-
-
-  const button =
-    document.getElementById(
-      "premiumButton"
-    );
-
-
-  if(!status)return;
-
-
-  try{
-
-    const data =
-      await api(
-        "/api/subscription/status"
-      );
-
-
-    const premium =
-      data?.premium === true ||
-
-      data?.isPremium === true ||
-
-      data?.data?.premium === true ||
-
-      data?.subscription?.status ===
-        "active";
-
-
-    isPremium =
-      premium;
-
-
-    if(premium){
-
-      status.innerHTML =
-        "Votre compte est actuellement <strong>Premium</strong>.";
-
-
-      if(badge){
-
-        badge.classList.remove(
-          "hidden"
-        );
-
-      }
-
-
-      if(button){
-
-        button.textContent =
-          "Premium activé";
-
-        button.disabled =
-          true;
-
-      }
-
-
-      updatePremiumUI(true);
-
-
-    }else{
-
-      status.innerHTML =
-        "Votre compte utilise actuellement <strong>Lumio Free</strong>.";
-
-
-      if(badge){
-
-        badge.classList.add(
-          "hidden"
-        );
-
-      }
-
-
-      if(button){
-
-        button.textContent =
-          "Activer Premium — 250 HTG";
-
-        button.disabled =
-          false;
-
-      }
-
-
-      updatePremiumUI(false);
-
-    }
-
-
-  }catch(error){
-
-    console.error(
-      "Erreur abonnement:",
-      error
-    );
-
-
-    isPremium =
-      false;
-
-
-    status.innerHTML =
-      "Votre compte utilise actuellement <strong>Lumio Free</strong>.";
-
-
-    if(badge){
-
-      badge.classList.add(
-        "hidden"
-      );
-
-    }
-
-
-    updatePremiumUI(false);
-
-  }
-
-}
-
-
-/* =====================================================
-   AVANTAGES PREMIUM
-===================================================== */
-
-function updatePremiumUI(premium){
-
-  const dashboardPremium =
-    document.querySelector(
-      "#dashboard .premium"
-    );
-
-
-  if(!dashboardPremium){
-
-    return;
-
-  }
-
-
-  if(premium){
-
-    dashboardPremium.innerHTML = `
-
-      <h2>
-        Lumio Premium activé
-      </h2>
-
-      <p
-        style="margin:12px 0 18px"
-      >
-        Votre compte a accès aux avantages Premium.
-      </p>
-
-      <button
-        class="primary"
-        onclick="showPage('premium')"
-      >
-        Voir mes avantages
-      </button>
-
-    `;
-
-  }else{
-
-    dashboardPremium.innerHTML = `
-
-      <h2>
-        Lumio Premium
-      </h2>
-
-      <p
-        style="margin:12px 0 18px"
-      >
-        Débloquez l'expérience Premium de Lumio.
-      </p>
-
-      <button
-        class="primary"
-        onclick="showPage('premium')"
-      >
-        Découvrir Premium
-      </button>
-
-    `;
-
-  }
-
-}
-
-
-/* =====================================================
-   ACTIVATION PREMIUM
-===================================================== */
-
-function activatePremium(){
-
-  const result =
-    document.getElementById(
-      "paymentResult"
-    );
-
-
-  const button =
-    document.getElementById(
-      "premiumButton"
-    );
-
-
-  if(isPremium){
-
-    if(result){
-
-      result.className =
-        "message show ok";
-
-      result.textContent =
-        "Votre compte Premium est déjà actif.";
-
-    }
-
-    return;
-
-  }
-
-
-  if(result){
-
-    result.className =
-      "message show ok";
-
-    result.textContent =
-      "Vous allez être redirigé vers Tchotchom pour payer 250 HTG.";
-
-  }
-
-
-  if(button){
-
-    button.disabled =
-      true;
-
-    button.textContent =
-      "Ouverture du paiement...";
-
-  }
-
-
-  /*
-    IMPORTANT :
-
-    Cette partie ne valide PAS automatiquement
-    le paiement.
-
-    Le paiement réel reste géré manuellement
-    par le propriétaire de Lumio.
-
-    Après réception du paiement,
-    le propriétaire active Premium
-    depuis le système prévu côté serveur.
-  */
-
-
-  setTimeout(
-    function(){
-
-      window.location.href =
-        TCHOTCHOM_PAYMENT_URL;
-
-    },
-    700
-  );
-
-}
-
-
-/* =====================================================
-   CONFIRMATION / RAFRAÎCHISSEMENT PREMIUM
-===================================================== */
-
-async function refreshPremiumStatus(){
-
-  try{
-
-    await loadSubscription();
-
-    if(isPremium){
-
-      const result =
-        document.getElementById(
-          "paymentResult"
-        );
-
-
-      if(result){
-
-        result.className =
-          "message show ok";
-
-        result.textContent =
-          "Paiement confirmé. Votre compte Premium est maintenant actif.";
-
-      }
-
-    }
-
-  }catch(error){
-
-    console.error(
-      "Erreur vérification Premium:",
-      error
-    );
-
-  }
-
-}
-
-
-/* =====================================================
-   INITIALISATION
-===================================================== */
-
-document.addEventListener(
-  "DOMContentLoaded",
-  function(){
-
-    updateTimer();
-
-
-    if(token){
-
-      openApp();
-
-    }else{
-
-      showAuth();
+      res.status(500).json({
+        success: false,
+        error:
+          "Impossible de récupérer le statut Premium."
+      });
 
     }
 
@@ -2931,26 +1154,304 @@ document.addEventListener(
 );
 
 
-/* =====================================================
-   PROTECTION CONTRE LES ERREURS
-===================================================== */
+/* =========================
+   ACTIVATE PREMIUM
+   =========================
+   
+   Cette route sert actuellement
+   de test pour activer Premium.
+   
+   Plus tard, elle sera remplacée
+   par la confirmation réelle du paiement.
+========================= */
 
-window.addEventListener(
-  "error",
-  function(event){
+app.post(
+  "/api/subscription/activate",
+  authenticate,
+  async (req, res) => {
 
-    console.error(
-      "Erreur JavaScript Lumio:",
-      event.error ||
-      event.message
-    );
+    try {
+
+      const plan =
+        String(req.body.plan || "premium");
+
+      const provider =
+        String(req.body.provider || "manual");
+
+      const existing =
+        await pool.query(
+          `
+          SELECT id
+          FROM subscriptions
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+          `,
+          [req.user.id]
+        );
+
+      let subscription;
+
+      if (existing.rows.length > 0) {
+
+        const result =
+          await pool.query(
+            `
+            UPDATE subscriptions
+            SET
+              status = 'active',
+              plan = $1,
+              provider = $2,
+              started_at = COALESCE(
+                started_at,
+                CURRENT_TIMESTAMP
+              ),
+              expires_at = NULL
+            WHERE id = $3
+            RETURNING
+              id,
+              status,
+              plan,
+              provider,
+              started_at,
+              expires_at,
+              created_at
+            `,
+            [
+              plan,
+              provider,
+              existing.rows[0].id
+            ]
+          );
+
+        subscription =
+          result.rows[0];
+
+      } else {
+
+        const result =
+          await pool.query(
+            `
+            INSERT INTO subscriptions
+            (
+              user_id,
+              status,
+              plan,
+              provider,
+              started_at
+            )
+            VALUES
+            (
+              $1,
+              'active',
+              $2,
+              $3,
+              CURRENT_TIMESTAMP
+            )
+            RETURNING
+              id,
+              status,
+              plan,
+              provider,
+              started_at,
+              expires_at,
+              created_at
+            `,
+            [
+              req.user.id,
+              plan,
+              provider
+            ]
+          );
+
+        subscription =
+          result.rows[0];
+
+      }
+
+      await pool.query(
+        `
+        UPDATE users
+        SET premium = TRUE
+        WHERE id = $1
+        `,
+        [req.user.id]
+      );
+
+      res.json({
+
+        success: true,
+
+        message:
+          "Premium activé avec succès.",
+
+        premium: true,
+
+        subscription
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Activate premium error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error:
+          "Impossible d'activer Premium."
+      });
+
+    }
 
   }
 );
 
 
-/* =====================================================
-   FIN DU JAVASCRIPT
-===================================================== */
+/* =========================
+   DISABLE PREMIUM
+   =========================
+   
+   Route utile pour les tests.
+========================= */
 
-</script>
+app.post(
+  "/api/subscription/cancel",
+  authenticate,
+  async (req, res) => {
+
+    try {
+
+      await pool.query(
+        `
+        UPDATE users
+        SET premium = FALSE
+        WHERE id = $1
+        `,
+        [req.user.id]
+      );
+
+      await pool.query(
+        `
+        UPDATE subscriptions
+        SET status = 'cancelled'
+        WHERE user_id = $1
+        AND status = 'active'
+        `,
+        [req.user.id]
+      );
+
+      res.json({
+        success: true,
+        premium: false,
+        message: "Premium désactivé."
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Cancel premium error:",
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error:
+          "Impossible de désactiver Premium."
+      });
+
+    }
+
+  }
+);
+
+
+/* =========================
+   404
+========================= */
+
+app.use((req, res) => {
+
+  res.status(404).json({
+    success: false,
+    error: "Route introuvable."
+  });
+
+});
+
+
+/* =========================
+   GLOBAL ERROR HANDLER
+========================= */
+
+app.use(
+  (error, req, res, next) => {
+
+    console.error(
+      "Unhandled server error:",
+      error
+    );
+
+    if (res.headersSent) {
+      return next(error);
+    }
+
+    res.status(500).json({
+      success: false,
+      error:
+        "Erreur interne du serveur."
+    });
+
+  }
+);
+
+
+/* =========================
+   START SERVER
+========================= */
+
+async function startServer() {
+
+  try {
+
+    await initializeDatabase();
+
+    app.listen(
+      PORT,
+      "0.0.0.0",
+      () => {
+
+        console.log(
+          `Lumio Backend 3.1.0 running on port ${PORT}`
+        );
+
+        console.log(
+          `Environment: ${
+            process.env.NODE_ENV || "development"
+          }`
+        );
+
+      }
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Failed to start Lumio Backend:",
+      error
+    );
+
+    process.exit(1);
+
+  }
+
+}
+
+
+/* =========================
+   START
+========================= */
+
+startServer();
