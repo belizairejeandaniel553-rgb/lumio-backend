@@ -950,7 +950,9 @@ app.post("/api/goals", authenticate, async (req, res) => {
     res.status(201).json({
       success: true,
       goal: result.rows[0]
-    });/* =========================
+    });
+
+  /* =========================
    UPDATE GOAL
 ========================= */
 
