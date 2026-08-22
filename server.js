@@ -952,22 +952,36 @@ app.post("/api/goals", authenticate, async (req, res) => {
       goal: result.rows[0]
     });
 
-  /* =========================
+  } catch (error) {
+
+    console.error("Create goal error:", error);
+
+    res.status(500).json({
+      success: false,
+      error: "Impossible de créer l'objectif."
+    });
+
+  }
+});
+
+
+/* =========================
    UPDATE GOAL
 ========================= */
 
 app.patch("/api/goals/:id", authenticate, async (req, res) => {
+
   try {
+
     const id = Number(req.params.id);
+    const progress = Number(req.body.progress);
 
     if (!Number.isInteger(id)) {
       return res.status(400).json({
         success: false,
-        error: "Identifiant d'objectif invalide."
+        error: "Identifiant invalide."
       });
     }
-
-    const progress = Number(req.body.progress);
 
     if (!Number.isInteger(progress) || progress < 0) {
       return res.status(400).json({
@@ -979,22 +993,25 @@ app.patch("/api/goals/:id", authenticate, async (req, res) => {
     const result = await pool.query(
       `
       UPDATE goals
-      SET progress = LEAST(progress, target)
-      WHERE id = $1
-      AND user_id = $2
+      SET progress = LEAST($1, target)
+      WHERE id = $2
+      AND user_id = $3
       RETURNING id, title, target, progress, created_at
       `,
       [
+        progress,
         id,
         req.user.id
       ]
     );
 
     if (result.rows.length === 0) {
+
       return res.status(404).json({
         success: false,
         error: "Objectif introuvable."
       });
+
     }
 
     res.json({
@@ -1012,6 +1029,7 @@ app.patch("/api/goals/:id", authenticate, async (req, res) => {
     });
 
   }
+
 });
 
 
@@ -1020,15 +1038,10 @@ app.patch("/api/goals/:id", authenticate, async (req, res) => {
 ========================= */
 
 app.delete("/api/goals/:id", authenticate, async (req, res) => {
-  try {
-    const id = Number(req.params.id);
 
-    if (!Number.isInteger(id)) {
-      return res.status(400).json({
-        success: false,
-        error: "Identifiant d'objectif invalide."
-      });
-    }
+  try {
+
+    const id = Number(req.params.id);
 
     const result = await pool.query(
       `
@@ -1044,10 +1057,12 @@ app.delete("/api/goals/:id", authenticate, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
+
       return res.status(404).json({
         success: false,
         error: "Objectif introuvable."
       });
+
     }
 
     res.json({
@@ -1065,6 +1080,7 @@ app.delete("/api/goals/:id", authenticate, async (req, res) => {
     });
 
   }
+
 });
 
 
@@ -1079,7 +1095,7 @@ app.get(
 
     try {
 
-      const userResult = await pool.query(
+      const result = await pool.query(
         `
         SELECT
           id,
@@ -1091,50 +1107,45 @@ app.get(
         [req.user.id]
       );
 
-      if (userResult.rows.length === 0) {
+      if (result.rows.length === 0) {
+
         return res.status(404).json({
           success: false,
           error: "Utilisateur introuvable."
         });
+
       }
 
-      const user = userResult.rows[0];
+      const user = result.rows[0];
 
-      const subscriptionResult = await pool.query(
-        `
-        SELECT
-          id,
-          status,
-          plan,
-          provider,
-          started_at,
-          expires_at,
-          created_at
-        FROM subscriptions
-        WHERE user_id = $1
-        ORDER BY created_at DESC
-        LIMIT 1
-        `,
-        [req.user.id]
-      );
-
-      const subscription =
-        subscriptionResult.rows.length > 0
-          ? subscriptionResult.rows[0]
-          : null;
+      const subscriptionResult =
+        await pool.query(
+          `
+          SELECT
+            id,
+            status,
+            plan,
+            provider,
+            started_at,
+            expires_at,
+            created_at
+          FROM subscriptions
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+          `,
+          [req.user.id]
+        );
 
       res.json({
         success: true,
-
         premium: Boolean(user.premium),
-
         user: {
           id: user.id,
           email: user.email
         },
-
-        subscription
-
+        subscription:
+          subscriptionResult.rows[0] || null
       });
 
     } catch (error) {
@@ -1158,13 +1169,6 @@ app.get(
 
 /* =========================
    ACTIVATE PREMIUM
-   =========================
-   
-   Cette route sert actuellement
-   de test pour activer Premium.
-   
-   Plus tard, elle sera remplacée
-   par la confirmation réelle du paiement.
 ========================= */
 
 app.post(
@@ -1180,96 +1184,40 @@ app.post(
       const provider =
         String(req.body.provider || "manual");
 
-      const existing =
+      const result =
         await pool.query(
           `
-          SELECT id
-          FROM subscriptions
-          WHERE user_id = $1
-          ORDER BY created_at DESC
-          LIMIT 1
+          INSERT INTO subscriptions
+          (
+            user_id,
+            status,
+            plan,
+            provider,
+            started_at
+          )
+          VALUES
+          (
+            $1,
+            'active',
+            $2,
+            $3,
+            CURRENT_TIMESTAMP
+          )
+          RETURNING
+            id,
+            status,
+            plan,
+            provider,
+            started_at,
+            expires_at,
+            created_at
           `,
-          [req.user.id]
+          [
+            req.user.id,
+            plan,
+            provider
+          ]
         );
-
-      let subscription;
-
-      if (existing.rows.length > 0) {
-
-        const result =
-          await pool.query(
-            `
-            UPDATE subscriptions
-            SET
-              status = 'active',
-              plan = $1,
-              provider = $2,
-              started_at = COALESCE(
-                started_at,
-                CURRENT_TIMESTAMP
-              ),
-              expires_at = NULL
-            WHERE id = $3
-            RETURNING
-              id,
-              status,
-              plan,
-              provider,
-              started_at,
-              expires_at,
-              created_at
-            `,
-            [
-              plan,
-              provider,
-              existing.rows[0].id
-            ]
-          );
-
-        subscription =
-          result.rows[0];
-
-      } else {
-
-        const result =
-          await pool.query(
-            `
-            INSERT INTO subscriptions
-            (
-              user_id,
-              status,
-              plan,
-              provider,
-              started_at
-            )
-            VALUES
-            (
-              $1,
-              'active',
-              $2,
-              $3,
-              CURRENT_TIMESTAMP
-            )
-            RETURNING
-              id,
-              status,
-              plan,
-              provider,
-              started_at,
-              expires_at,
-              created_at
-            `,
-            [
-              req.user.id,
-              plan,
-              provider
-            ]
-          );
-
-        subscription =
-          result.rows[0];
-
-      }
 
       await pool.query(
         `
@@ -1281,16 +1229,10 @@ app.post(
       );
 
       res.json({
-
         success: true,
-
-        message:
-          "Premium activé avec succès.",
-
         premium: true,
-
-        subscription
-
+        message: "Premium activé avec succès.",
+        subscription: result.rows[0]
       });
 
     } catch (error) {
@@ -1304,64 +1246,6 @@ app.post(
         success: false,
         error:
           "Impossible d'activer Premium."
-      });
-
-    }
-
-  }
-);
-
-
-/* =========================
-   DISABLE PREMIUM
-   =========================
-   
-   Route utile pour les tests.
-========================= */
-
-app.post(
-  "/api/subscription/cancel",
-  authenticate,
-  async (req, res) => {
-
-    try {
-
-      await pool.query(
-        `
-        UPDATE users
-        SET premium = FALSE
-        WHERE id = $1
-        `,
-        [req.user.id]
-      );
-
-      await pool.query(
-        `
-        UPDATE subscriptions
-        SET status = 'cancelled'
-        WHERE user_id = $1
-        AND status = 'active'
-        `,
-        [req.user.id]
-      );
-
-      res.json({
-        success: true,
-        premium: false,
-        message: "Premium désactivé."
-      });
-
-    } catch (error) {
-
-      console.error(
-        "Cancel premium error:",
-        error
-      );
-
-      res.status(500).json({
-        success: false,
-        error:
-          "Impossible de désactiver Premium."
       });
 
     }
@@ -1385,32 +1269,6 @@ app.use((req, res) => {
 
 
 /* =========================
-   GLOBAL ERROR HANDLER
-========================= */
-
-app.use(
-  (error, req, res, next) => {
-
-    console.error(
-      "Unhandled server error:",
-      error
-    );
-
-    if (res.headersSent) {
-      return next(error);
-    }
-
-    res.status(500).json({
-      success: false,
-      error:
-        "Erreur interne du serveur."
-    });
-
-  }
-);
-
-
-/* =========================
    START SERVER
 ========================= */
 
@@ -1427,12 +1285,6 @@ async function startServer() {
 
         console.log(
           `Lumio Backend 3.1.0 running on port ${PORT}`
-        );
-
-        console.log(
-          `Environment: ${
-            process.env.NODE_ENV || "development"
-          }`
         );
 
       }
